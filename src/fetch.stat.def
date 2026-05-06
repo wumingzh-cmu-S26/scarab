@@ -282,3 +282,8 @@ DEF_STAT(CYCLES_RESTEER_BTB_MISS_COULD_BE_SAVED_UC_FETCH, DIST, NO_RATIO)
 
 DEF_STAT(CYCLES_UOC_IC_SWITCH            , COUNT   , NO_RATIO)
 
+////////////////////////////////////////////////////////////////////////////////////////
+// Ideal fusion (pass-1 candidate identification)
+DEF_STAT(TOTAL_ON_PATH_MEM_LDS           , COUNT   , NO_RATIO)
+DEF_STAT(NUM_PAIRS_FUSED                 , COUNT   , NO_RATIO)
+

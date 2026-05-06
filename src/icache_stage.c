@@ -69,6 +69,8 @@
 #include "thread.h"
 #include "uop_queue_stage.h"
 
+#include "ideal_fusion.h"
+
 /**************************************************************************************/
 /* Macros */
 
@@ -980,6 +982,8 @@ static inline void icache_process_ops(Stage_Data* cur_data, Flag fetched_from_uo
       op->bp_pred_l0.pred_global_hist = g_bp_data->global_hist;
       op->bp_pred_main.pred_global_hist = g_bp_data->global_hist;
     }
+
+    ideal_fusion_process_op(op);
   }
 }
 
