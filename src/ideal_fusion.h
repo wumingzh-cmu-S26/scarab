@@ -10,8 +10,8 @@
  *   - LOAD2's on-path micro-op count minus LOAD1's is < FUSION_DISTANCE,
  *   - each load participates in at most one pair.
  *
- * Pairs are written to log_train_input_fusion_candidates.txt (CSV) when
- * --log_train_input_candidates 1 is set on the cmd line.
+ * Pairs are written to log_ifuse_pairs.txt (CSV) when
+ * --log_ifuse_pairs 1 is set on the cmd line.
  */
 
 #ifndef __IDEAL_FUSION_H__

@@ -114,5 +114,5 @@ DEF_PARAM( trace_footprint_output       , TRACE_FOOTPRINT_OUTPUT    , char*  , s
 DEF_PARAM( segment_instr_count          , SEGMENT_INSTR_COUNT       , uns64  , uns64     , 0        ,       )
 
 /* Ideal fusion (pass-1 candidate identification) */
-DEF_PARAM( log_train_input_candidates   , LOG_TRAIN_INPUT_FUSION_CANDIDATES , Flag , Flag , FALSE , )
-DEF_PARAM( fusion_distance              , FUSION_DISTANCE                   , uns  , uns  , 352   , )
+DEF_PARAM( log_ifuse_pairs              , LOG_IFUSE_PAIRS                   , Flag , Flag , FALSE , )
+DEF_PARAM( fusion_distance              , FUSION_DISTANCE                   , uns  , uns  , 512   , )

@@ -82,9 +82,9 @@ static inline Flag same_cacheblock(Addr a1, uns s1, Addr a2, uns s2) {
 }
 
 static void open_log_if_needed(void) {
-  if (!LOG_TRAIN_INPUT_FUSION_CANDIDATES || log_train_open)
+  if (!LOG_IFUSE_PAIRS || log_train_open)
     return;
-  log_training_input = fopen("log_train_input_fusion_candidates.txt", "w");
+  log_training_input = fopen("log_ifuse_pairs.txt", "w");
   if (!log_training_input) {
     fprintf(stderr, "ideal_fusion: failed to open log file\n");
     return;
@@ -217,7 +217,7 @@ void ideal_fusion_init(void) {
 }
 
 void ideal_fusion_process_op(Op* op) {
-  if (!LOG_TRAIN_INPUT_FUSION_CANDIDATES)
+  if (!LOG_IFUSE_PAIRS)
     return;
   if (!initialized)
     ideal_fusion_init();
