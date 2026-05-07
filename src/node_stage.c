@@ -65,6 +65,8 @@
 #include "thread.h"
 #include "xed-iclass-enum.h"
 
+#include "ideal_fusion.h"
+
 /* Macros */
 
 #define DEBUG(proc_id, args...) _DEBUG(proc_id, DEBUG_NODE_STAGE, ##args)
@@ -444,7 +446,10 @@ void node_fill_rob(Stage_Data* src_sd) {
     if (!op)
       continue;
 
-    if (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST) {
+    /* IFUSE: fused LOAD2 doesn't issue a memory request, so don't take an LSQ slot. */
+    Flag ifuse_skip_lsq = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!ifuse_skip_lsq && (op->inst_info->table_info.mem_type == MEM_LD ||
+                            op->inst_info->table_info.mem_type == MEM_ST)) {
       if (!lsq_available(op->inst_info->table_info.mem_type)) {
         DEBUG(node->proc_id, "Node fill stalled: LSQ full for op_num:%s mem_type:%s src_sd_op_count:%d node_count:%d\n",
               unsstr64(op->op_num), op->inst_info->table_info.mem_type == MEM_LD ? "LD" : "ST", src_sd->op_count,
@@ -486,7 +491,9 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     // Jump uop after CMP or TEST will be fused into one uop
     node_fuse_op(op);
-    if (!op->macro_fused)
+    /* IFUSE: fused LOAD2 doesn't take a node-table slot. */
+    Flag ifuse_skip_count = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!op->macro_fused && !ifuse_skip_count)
       node->node_count++;
 
     ASSERTM(node->proc_id, node->node_count <= NODE_TABLE_SIZE,
@@ -497,7 +504,9 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     DEBUG(node->proc_id, "Issuing the op op_num:%s off_path:%d\n", unsstr64(op->op_num), op->off_path);
 
-    op->state = OS_IN_ROB;
+    /* IFUSE: fused LOAD2 is a no-op — mark it OS_DONE immediately so retire
+     * eats it without going through RS / FU / dcache. */
+    op->state = (DO_FUSION && op->fusion_candidate_type == LOAD2) ? OS_DONE : OS_IN_ROB;
 
     /* always stop issuing after a synchronizing op */
     if (op->inst_info->table_info.bar_type & BAR_ISSUE)
@@ -633,7 +642,10 @@ void node_retire() {
 
     node_precommit_retire(op);
 
-    if (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST) {
+    /* IFUSE: fused LOAD2 was never on the LSQ; skip lsq_commit. */
+    Flag ifuse_is_load2 = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!ifuse_is_load2 &&
+        (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST)) {
       lsq_commit(op);
     }
 
@@ -646,8 +658,8 @@ void node_retire() {
       printf("[ft_free_op] stage=node_stage:retire op_num=%llu op=%p\n", (unsigned long long)op->op_num, (void*)op);
       ft_free_op(op);
     }
-    // the fused op does not occupy the ROB entry
-    if (!macro_fused_saved)
+    // the fused op does not occupy the ROB entry; same is true of IFUSE LOAD2
+    if (!macro_fused_saved && !ifuse_is_load2)
       node->node_count--;
 
     ASSERT(node->proc_id, node->node_count >= 0);
