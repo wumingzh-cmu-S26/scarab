@@ -505,8 +505,18 @@ void node_fill_rob(Stage_Data* src_sd) {
     DEBUG(node->proc_id, "Issuing the op op_num:%s off_path:%d\n", unsstr64(op->op_num), op->off_path);
 
     /* IFUSE: fused LOAD2 is a no-op — mark it OS_DONE immediately so retire
-     * eats it without going through RS / FU / dcache. */
-    op->state = (DO_FUSION && op->fusion_candidate_type == LOAD2) ? OS_DONE : OS_IN_ROB;
+     * eats it without going through RS / FU / dcache. Also pre-commit it so
+     * node_precommit_retire's assertion is satisfied (LOAD2 never goes through
+     * the normal node_precommit_update flow because it's already OS_DONE and
+     * may retire before the precommit walker reaches it). */
+    if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+      op->state           = OS_DONE;
+      op->precommitted    = TRUE;
+      op->precommit_cycle = cycle_count;
+      op->done_cycle      = cycle_count;  /* OP_DONE check uses this */
+    } else {
+      op->state = OS_IN_ROB;
+    }
 
     /* always stop issuing after a synchronizing op */
     if (op->inst_info->table_info.bar_type & BAR_ISSUE)
