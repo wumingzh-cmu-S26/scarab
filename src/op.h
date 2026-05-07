@@ -125,6 +125,14 @@ typedef struct Dp_Info_struct {
 } Dp_Info;
 
 /**************************************************************************************/
+// IFUSE — ideal fusion candidate type tag set at fetch
+typedef enum FusionCandidateType_enum {
+  NOT_FUSION_CANDIDATE = 0,  // default — must be 0 so zero-init gives this
+  LOAD1                = 1,
+  LOAD2                = 2,
+} FusionCandidateType;
+
+/**************************************************************************************/
 /* typedef in globals/global_types.h */
 
 struct Op_struct {
@@ -214,6 +222,17 @@ struct Op_struct {
   struct Mem_Req_struct* req;  // pointer to memory request responsible for waking up the op
 
   Flag marked;  // for algorithms that mark already seen ops
+
+  // {{{ IFUSE — ideal fusion (pass-2)
+  // Set at fetch by ideal_fusion_classify_at_icache() based on the candidate CSV.
+  // Read in map_stage (Load2 buffer create/find), node_stage (RS/LQ/node_count skip),
+  // and map.c::wake_up_ops (LOAD1 wakes LOAD2's dependents).
+  unsigned int        global_micro_op_num;       // monotonic on-path counter; matches CSV gmons
+  FusionCandidateType fusion_candidate_type;     // NOT_FUSION_CANDIDATE / LOAD1 / LOAD2
+  unsigned int        partner_micro_op_num;      // partner's gmon (LOAD2 stores LOAD1's, vice versa)
+  Flag                load1_woke_up_dependents;  // tracking flag (init FALSE)
+  Flag                load2_woke_up_dependents;  // tracking flag (init FALSE)
+  // }}}
 
   /*------------------------------------------------------------------------------------*/
   // FIELDS BELOW THIS POINT SHOULD BE MOVED INTO OTHER HEADERS

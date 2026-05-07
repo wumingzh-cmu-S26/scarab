@@ -113,6 +113,10 @@ DEF_PARAM( trace_bbv_output             , TRACE_BBV_OUTPUT          , char*  , s
 DEF_PARAM( trace_footprint_output       , TRACE_FOOTPRINT_OUTPUT    , char*  , string    , ""       ,       )
 DEF_PARAM( segment_instr_count          , SEGMENT_INSTR_COUNT       , uns64  , uns64     , 0        ,       )
 
-/* Ideal fusion (pass-1 candidate identification) */
-DEF_PARAM( log_ifuse_pairs              , LOG_IFUSE_PAIRS                   , Flag , Flag , FALSE , )
-DEF_PARAM( fusion_distance              , FUSION_DISTANCE                   , uns  , uns  , 512   , )
+/* IFUSE — ideal fusion */
+/* Pass 1: identify candidate load pairs and write CSV */
+DEF_PARAM( log_ifuse_pairs              , LOG_IFUSE_PAIRS                   , Flag   , Flag   , FALSE , )
+DEF_PARAM( fusion_distance              , FUSION_DISTANCE                   , uns    , uns    , 512   , )
+/* Pass 2: actuate fusion using CSV produced by pass 1 */
+DEF_PARAM( do_fusion                    , DO_FUSION                         , Flag   , Flag   , FALSE , )
+DEF_PARAM( fusion_candidates_file       , FUSION_CANDIDATES_FILE            , char*  , string , NULL  , )
