@@ -54,6 +54,8 @@
 #include "statistics.h"
 #include "thread.h"
 
+#include "ideal_fusion.h"
+
 /**************************************************************************************/
 /* Macros */
 #define DEBUG(proc_id, args...) _DEBUG(proc_id, DEBUG_MAP_STAGE, ##args)
@@ -246,6 +248,112 @@ void update_map_stage(Stage_Data* src_sd) {
 }
 
 /**************************************************************************************/
+/* IFUSE — Load2 buffer hash table accessors.
+ *
+ * The buffer coordinates LOAD1 completion with LOAD2 dependent wakeup.
+ * Storage (load2_buffer_ht[]) lives in ideal_fusion.c; the access primitives
+ * live here so they're co-located with the per-op handler that drives them. */
+
+static inline unsigned int load2_buffer_hash(Counter a, Counter b) {
+  const uint32_t prime1 = 0x9e3779b1;
+  const uint32_t prime2 = 0x85ebca6b;
+  uint32_t       h      = (uint32_t)a * prime1;
+  h ^= (uint32_t)b * prime2;
+  h ^= h >> 16;
+  return h % LOAD2_BUFFER_HT_SIZE;
+}
+
+Load2BufferNode* find_load2_buffer_node(Counter load1_gmon, Counter load2_gmon) {
+  unsigned int     idx = load2_buffer_hash(load1_gmon, load2_gmon);
+  Load2BufferNode* cur = load2_buffer_ht[idx];
+  while (cur) {
+    if (cur->entry.load1_global_micro_op_num == load1_gmon)
+      return cur;
+    cur = cur->next;
+  }
+  return NULL;
+}
+
+Load2BufferNode* create_load2_buffer_node(Counter load1_gmon, Counter load2_gmon) {
+  Load2BufferNode* node = (Load2BufferNode*)malloc(sizeof(Load2BufferNode));
+  if (!node)
+    return NULL;
+  memset(&node->entry, 0, sizeof(Load2BufferEntry));
+  node->entry.load1_global_micro_op_num = load1_gmon;
+  node->entry.creation_cycle            = cycle_count;
+  unsigned int idx                      = load2_buffer_hash(load1_gmon, load2_gmon);
+  node->next                            = load2_buffer_ht[idx];
+  load2_buffer_ht[idx]                  = node;
+  return node;
+}
+
+void remove_load2_buffer_node(Load2BufferNode* node) {
+  if (!node)
+    return;
+  Counter           k    = node->entry.load1_global_micro_op_num;
+  unsigned int      idx  = load2_buffer_hash(k, k);
+  Load2BufferNode** slot = &load2_buffer_ht[idx];
+  while (*slot) {
+    if (*slot == node) {
+      *slot = node->next;
+      free(node);
+      return;
+    }
+    slot = &(*slot)->next;
+  }
+  /* Not in chain (already removed?). Defensive free. */
+  free(node);
+}
+
+/* Per-op IFUSE handler at map-stage. Called from stage_process_op AFTER the
+ * standard add_to_wake_up_lists, so that wake_up_ops on LOAD2 (in the
+ * load1_already_completed branch) finds a populated wake_up list. */
+static inline void ifuse_map_handle(Op* op) {
+  if (!DO_FUSION)
+    return;
+  if (op->off_path)
+    return;
+  if (op->fusion_candidate_type == NOT_FUSION_CANDIDATE)
+    return;
+
+  if (op->fusion_candidate_type == LOAD1) {
+    Counter          load1_gmon = (Counter)op->global_micro_op_num;
+    Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
+    if (!node) {
+      node = create_load2_buffer_node(load1_gmon, load1_gmon);
+    }
+    /* If node already existed, leave its state alone — earlier instance from
+     * before a recovery may have populated it; this new LOAD1 (same gmon should
+     * not actually recur, since gmons are monotonically assigned at fetch) just
+     * reuses the slot. */
+  } else if (op->fusion_candidate_type == LOAD2) {
+    Counter          load1_gmon = (Counter)op->partner_micro_op_num;
+    Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
+    if (!node) {
+      /* LOAD1 hasn't reached map_stage yet — shouldn't happen because ops
+       * flow through map_stage in program order, but be defensive. */
+      node                                    = create_load2_buffer_node(load1_gmon, load1_gmon);
+      node->entry.load1_global_micro_op_num   = load1_gmon;
+    }
+    node->entry.load2                     = op;
+    node->entry.load2_unique_num          = op->unique_num;  /* recycling guard */
+    node->entry.load2_global_micro_op_num = (Counter)op->global_micro_op_num;
+
+    if (node->entry.load1_completed) {
+      /* LOAD1 already finished while LOAD2 was upstream; LOAD1's wake_up
+       * skipped LOAD2's deps because LOAD2 wasn't here yet. Wake them now,
+       * then clean up the entry. */
+      wake_up_ops(op, REG_DATA_DEP, model->wake_hook);
+      node->entry.pair_completed = TRUE;
+      remove_load2_buffer_node(node);
+    } else {
+      node->entry.load2_waiting  = TRUE;
+      node->entry.pair_completed = FALSE;
+    }
+  }
+}
+
+/**************************************************************************************/
 /* Local methods */
 
 static inline void stage_process_op(Op* op) {
@@ -264,6 +372,9 @@ static inline void stage_process_op(Op* op) {
 
   /* setting wake up lists */
   add_to_wake_up_lists(op, model->wake_hook);
+
+  /* IFUSE: coordinate fused load pair via Load2 buffer */
+  ifuse_map_handle(op);
 }
 
 static inline void map_stage_collect_stat(Flag stall, Flag starved) {
