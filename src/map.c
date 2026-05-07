@@ -49,6 +49,8 @@
 #include "cmp_model.h"
 #include "map_rename.h"
 #include "model.h"
+
+#include "ideal_fusion.h"
 #include "op_info.h"
 #include "statistics.h"
 #include "thread.h"
@@ -556,6 +558,56 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
   reg_file_produce(op);
 
   ASSERT(op->proc_id, wake_action);
+
+  /* IFUSE: when LOAD1 of a fused pair completes, also wake LOAD2's dependents
+   * via the Load2 buffer rendezvous. Order doesn't matter relative to LOAD1's
+   * own wakeup loop below; we do it first to mirror the reference. */
+  if (DO_FUSION && type == REG_DATA_DEP && !op->off_path &&
+      op->fusion_candidate_type == LOAD1) {
+    Counter          load1_gmon = (Counter)op->global_micro_op_num;
+    Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
+    if (!node) {
+      /* LOAD1 is completing without map_stage having created the entry —
+       * shouldn't happen in normal flow but be defensive. */
+      node = create_load2_buffer_node(load1_gmon, load1_gmon);
+    }
+    node->entry.load1_completed = TRUE;
+
+    if (node->entry.load2 != NULL && node->entry.load2_waiting && !node->entry.pair_completed) {
+      Op* load2 = node->entry.load2;
+      /* Recycling guard: the cached Op* may have been reclaimed by a pipeline
+       * flush. Verify identity before dereference. */
+      if (load2->op_pool_valid &&
+          load2->unique_num == node->entry.load2_unique_num &&
+          load2->fusion_candidate_type == LOAD2) {
+        for (temp = load2->wake_up_head; temp; temp = temp->next) {
+          Op*     dep_op    = temp->op;
+          Counter dep_uniq  = temp->unique_num;
+          if (temp->dep_type != REG_DATA_DEP)
+            continue;
+          if (dep_op->unique_num != dep_uniq || !dep_op->op_pool_valid)
+            continue;
+          if (op_sources_test_not_rdy(dep_op, temp->rdy_bit)) {
+            op_sources_clear_not_rdy(dep_op, temp->rdy_bit);
+            wake_action(load2, dep_op, temp->rdy_bit);
+          }
+        }
+        load2->wake_up_signaled[REG_DATA_DEP] = TRUE;
+        node->entry.pair_completed            = TRUE;
+        remove_load2_buffer_node(node);
+      } else {
+        /* LOAD2 was flushed or recycled; drop the entry. */
+        STAT_EVENT(op->proc_id, IFUSE_LOAD2_FLUSHED);
+        remove_load2_buffer_node(node);
+      }
+    } else {
+      /* LOAD2 hasn't reached map_stage yet — leave the entry with
+       * load1_completed=TRUE; LOAD2's map_stage handler will pick this up
+       * and wake its own deps then. */
+      STAT_EVENT(op->proc_id, IFUSE_LOAD1_NO_LOAD2);
+    }
+  }
+
   for (temp = op->wake_up_head; temp; temp = temp->next) {
     Op* dep_op = temp->op;
     Counter dep_unique_num = temp->unique_num;
