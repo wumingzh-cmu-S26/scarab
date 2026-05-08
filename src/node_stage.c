@@ -254,7 +254,10 @@ void flush_window() {
       DEBUG(node->proc_id, "Node window flushing op_num:%llu off_path:%u\n", (unsigned long long)op->op_num,
             op->off_path);
       ASSERT(node->proc_id, op->off_path);
-      if (!op->macro_fused)
+      /* IFUSE: LOAD2 was never counted toward node_count at issue, so it
+       * also shouldn't count toward flush_ops here. */
+      Flag ifuse_skip = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      if (!op->macro_fused && !ifuse_skip)
         flush_ops++;
       ASSERT(node->proc_id, op->off_path);
       ASSERT(node->proc_id, op->op_num > bp_recovery_info->recovery_op_num);
@@ -275,7 +278,9 @@ void flush_window() {
         op->recovery_scheduled = FALSE;
       }
       DEBUG(node->proc_id, "Node keeping  op:%s node_id:%llu\n", unsstr64(op->op_num), op->node_id);
-      if (!op->macro_fused)
+      /* IFUSE: same exclusion as flush_ops above. */
+      Flag ifuse_skip_keep = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      if (!op->macro_fused && !ifuse_skip_keep)
         keep_ops++;
       last = &op->next_node;
       node->node_tail = op;
