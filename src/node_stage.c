@@ -743,8 +743,21 @@ Flag op_not_ready_for_retire(Op* op) {
 Flag is_node_table_empty() {
   if (node->node_count == 0) {
     if (node->node_head != NULL) {
-      ASSERT(node->proc_id, node->node_head->macro_fused);
-      return FALSE;
+      /* IFUSE: LOAD2 ops sit on the node_head chain but don't count toward
+       * node_count. If everything left in the chain is either macro_fused
+       * or IFUSE LOAD2, the table is logically empty (just waiting on retire
+       * to drain the cosmetic chain). */
+      Flag all_skippable = TRUE;
+      for (Op* o = node->node_head; o; o = o->next_node) {
+        if (o->macro_fused)
+          continue;
+        if (DO_FUSION && o->fusion_candidate_type == LOAD2)
+          continue;
+        all_skippable = FALSE;
+        break;
+      }
+      ASSERT(node->proc_id, all_skippable);
+      return FALSE;  /* not "empty" yet — there are LOAD2/macro_fused ops to retire */
     }
 
     ASSERT(node->proc_id, node->node_head == NULL);
