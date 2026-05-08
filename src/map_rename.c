@@ -499,6 +499,13 @@ static inline void reg_file_flush_mispredict(Op *op, int *reg_table_types, int r
 
 // mark the previous entry with same archituctural id before the committed one as dead and remove it
 static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_table_num) {
+  /* IFUSE: a fused LOAD2 was not registered as a consumer at rename
+   * (reg_table_entry_read returned early), so its source entries'
+   * onpath_consumers_num may legitimately be 0. The src-side loop below is
+   * sanity-only (no state changes); skip it for LOAD2. The dst commit iteration
+   * (after this block) still runs normally. */
+  Flag ifuse_skip_src = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+  if (!ifuse_skip_src) {
   for (uns ii = 0; ii < op->inst_info->table_info.num_src_regs; ++ii) {
     int reg_type = reg_file_get_reg_type(op->src_reg_id[ii][REG_TABLE_TYPE_ARCHITECTURAL]);
     if (reg_type == REG_FILE_REG_TYPE_OTHER)
@@ -515,6 +522,7 @@ static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_t
 
       ASSERT(op->proc_id, entry != NULL && entry->onpath_consumers_num > 0);
     }
+  }
   }
 
   for (uns ii = 0; ii < op->inst_info->table_info.num_dest_regs; ++ii) {
