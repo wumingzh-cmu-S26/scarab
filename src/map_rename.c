@@ -220,6 +220,23 @@ static inline void reg_file_collect_released_entry_stat(struct reg_table_entry *
   // set the cycle counts for unconsumed registers
   entry->produced_cycle = entry->produced_cycle == MAX_CTR ? cycle_count : entry->produced_cycle;
   entry->onpath_consumed_cycle = entry->onpath_consumed_cycle == MAX_CTR ? cycle_count : entry->onpath_consumed_cycle;
+  if (entry->onpath_consumed_cycle < entry->produced_cycle) {
+    Op* eop = entry->op;
+    fprintf(stderr,
+            "IFUSE-DEBUG entry-release-fail: producer_op_num=%llu uniq=%llu reg_type=%d "
+            "alloc=%lld produced=%lld consumed=%lld now=%lld consumers=%d consumed_count=%d "
+            "fct=%d off=%d\n",
+            (unsigned long long)entry->op_num,
+            (unsigned long long)entry->unique_num,
+            entry->reg_type,
+            (long long)entry->allocated_cycle,
+            (long long)entry->produced_cycle,
+            (long long)entry->onpath_consumed_cycle,
+            (long long)cycle_count,
+            entry->onpath_consumers_num, entry->onpath_consumed_count,
+            eop ? (int)eop->fusion_candidate_type : -1,
+            (int)entry->off_path);
+  }
   ASSERT(map_data->proc_id, entry->produced_cycle >= entry->allocated_cycle);
   ASSERT(map_data->proc_id, entry->onpath_consumed_cycle >= entry->produced_cycle);
   ASSERT(map_data->proc_id, cycle_count >= entry->onpath_consumed_cycle);
