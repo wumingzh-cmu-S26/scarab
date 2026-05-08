@@ -519,12 +519,14 @@ void node_fill_rob(Stage_Data* src_sd) {
        * a LOAD2 in node_head would block precommit of every later op. Stamp
        * dcache_cycle as if the dcache hit at issue so the walker passes. */
       op->dcache_cycle    = cycle_count;
-      /* LOAD2 normally reads its address registers at exec_stage, which calls
-       * reg_file_consume to bump the producer entries' onpath_consumed_count.
-       * Since LOAD2 never reaches exec_stage, do the consume here so that the
-       * source registers' commit-time invariant
-       * (onpath_consumed_count == onpath_consumers_num) holds. */
+      /* LOAD2 normally reads its address registers at exec_stage (calls
+       * reg_file_consume) and produces its destination at wake_up_ops (calls
+       * reg_file_produce). Since fused LOAD2 reaches neither, mirror those
+       * calls here so the rename tables stay in their expected states:
+       *   - sources: onpath_consumed_count must reach onpath_consumers_num
+       *   - destination: state ALLOC -> PRODUCED before the COMMIT transition. */
       reg_file_consume(op);
+      reg_file_produce(op);
     } else {
       op->state = OS_IN_ROB;
     }
