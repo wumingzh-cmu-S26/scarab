@@ -588,13 +588,10 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
          * actually become ready. Also stamp done_cycle for OP_DONE() callers. */
         load2->wake_cycle = op->wake_cycle;
         load2->done_cycle = op->done_cycle;
-        /* Mirror what exec_stage + wake_up_ops do for a normal load:
-         *   - reg_file_consume bumps source entries' onpath_consumed_count
-         *     (so their commit-time invariant holds). Doing it here (not at
-         *     issue) ensures producers of LOAD2's sources have already
-         *     produced — preserves produced_cycle <= consumed_cycle.
-         *   - reg_file_produce transitions LOAD2's dst entry ALLOC -> PRODUCED. */
-        reg_file_consume(load2);
+        /* IFUSE: LOAD2 was never registered as a consumer at rename
+         * (reg_table_entry_read returns early for LOAD2), so we don't need
+         * a fake reg_file_consume here. We do still need to transition
+         * LOAD2's dst entry ALLOC -> PRODUCED so commit doesn't assert. */
         reg_file_produce(load2);
         for (temp = load2->wake_up_head; temp; temp = temp->next) {
           Op*     dep_op    = temp->op;

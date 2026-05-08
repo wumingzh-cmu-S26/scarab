@@ -693,6 +693,15 @@ void reg_table_entry_read(struct reg_table_entry *entry, Op *op) {
   if (op->off_path)
     return;
 
+  /* IFUSE: a fused LOAD2 never reaches exec_stage, so it would never call
+   * reg_file_consume on its sources. Don't register it as a consumer either —
+   * keeps the producer entry's consumers_num/consumed_count balanced without
+   * requiring a fake-consume call (which causes produced_cycle vs consumed_cycle
+   * ordering violations when LOAD2's source is itself produced later). */
+  if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+    return;
+  }
+
   entry->onpath_consumers_num++;
   entry->lastuse_op_num = op->op_num;
   entry->lastuse_committed = FALSE;
