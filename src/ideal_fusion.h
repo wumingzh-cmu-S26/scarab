@@ -62,6 +62,10 @@ typedef struct Load2BufferEntry {
   Flag    load2_waiting;                      // LOAD2 has registered and is waiting on LOAD1
   Flag    load1_completed;                    // LOAD1 has executed
   Flag    pair_completed;                     // LOAD2's deps have been woken
+  Counter load1_wake_cycle;                   // LOAD1's wake_cycle at completion (used to set LOAD2's
+                                              //   wake_cycle when LOAD2 wakes its deps in the
+                                              //   load1-already-completed case)
+  Counter load1_done_cycle;                   // similar — for OP_DONE() consumers
   Counter load1_global_micro_op_num;
   Counter load2_global_micro_op_num;
   Counter creation_cycle;                     // for periodic cleanup

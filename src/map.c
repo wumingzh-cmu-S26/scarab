@@ -571,7 +571,9 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
        * shouldn't happen in normal flow but be defensive. */
       node = create_load2_buffer_node(load1_gmon, load1_gmon);
     }
-    node->entry.load1_completed = TRUE;
+    node->entry.load1_completed  = TRUE;
+    node->entry.load1_wake_cycle = op->wake_cycle;
+    node->entry.load1_done_cycle = op->done_cycle;
 
     if (node->entry.load2 != NULL && node->entry.load2_waiting && !node->entry.pair_completed) {
       Op* load2 = node->entry.load2;
@@ -580,6 +582,12 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
       if (load2->op_pool_valid &&
           load2->unique_num == node->entry.load2_unique_num &&
           load2->fusion_candidate_type == LOAD2) {
+        /* IFUSE: cmp_wake reads src_op->wake_cycle to set dep_op->rdy_cycle.
+         * LOAD2 never went through dcache/exec_stage, so its wake_cycle is
+         * still MAX_CTR (op_pool init). Inherit LOAD1's wake_cycle so deps
+         * actually become ready. Also stamp done_cycle for OP_DONE() callers. */
+        load2->wake_cycle = op->wake_cycle;
+        load2->done_cycle = op->done_cycle;
         for (temp = load2->wake_up_head; temp; temp = temp->next) {
           Op*     dep_op    = temp->op;
           Counter dep_uniq  = temp->unique_num;
