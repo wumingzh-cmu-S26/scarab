@@ -521,12 +521,11 @@ void node_fill_rob(Stage_Data* src_sd) {
       op->dcache_cycle    = cycle_count;
       /* LOAD2 normally reads its address registers at exec_stage (calls
        * reg_file_consume) and produces its destination at wake_up_ops (calls
-       * reg_file_produce). Since fused LOAD2 reaches neither, mirror those
-       * calls here so the rename tables stay in their expected states:
-       *   - sources: onpath_consumed_count must reach onpath_consumers_num
-       *   - destination: state ALLOC -> PRODUCED before the COMMIT transition. */
+       * reg_file_produce). For consume, do it here. For produce, defer it to
+       * the wake_up_ops fusion block in map.c (called from LOAD1's wake_up)
+       * so the dst entry's PRODUCED transition aligns with when the dependents
+       * actually wake — same wall-clock cycle a normal LOAD2's produce would. */
       reg_file_consume(op);
-      reg_file_produce(op);
     } else {
       op->state = OS_IN_ROB;
     }

@@ -588,6 +588,10 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
          * actually become ready. Also stamp done_cycle for OP_DONE() callers. */
         load2->wake_cycle = op->wake_cycle;
         load2->done_cycle = op->done_cycle;
+        /* Mirror what wake_up_ops does for normal producers — transition
+         * LOAD2's dst entry from ALLOC to PRODUCED. Without this, the
+         * commit-time assertion (state == PRODUCED) would fail at retire. */
+        reg_file_produce(load2);
         for (temp = load2->wake_up_head; temp; temp = temp->next) {
           Op*     dep_op    = temp->op;
           Counter dep_uniq  = temp->unique_num;
