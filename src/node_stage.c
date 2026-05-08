@@ -524,13 +524,12 @@ void node_fill_rob(Stage_Data* src_sd) {
        * a LOAD2 in node_head would block precommit of every later op. Stamp
        * dcache_cycle as if the dcache hit at issue so the walker passes. */
       op->dcache_cycle    = cycle_count;
-      /* LOAD2 normally reads its address registers at exec_stage (calls
-       * reg_file_consume) and produces its destination at wake_up_ops (calls
-       * reg_file_produce). For consume, do it here. For produce, defer it to
-       * the wake_up_ops fusion block in map.c (called from LOAD1's wake_up)
-       * so the dst entry's PRODUCED transition aligns with when the dependents
-       * actually wake — same wall-clock cycle a normal LOAD2's produce would. */
-      reg_file_consume(op);
+      /* LOAD2's reg_file_consume + reg_file_produce are deferred to the
+       * wake_up_ops fusion block in map.c (or to wake_up_ops(LOAD2) in the
+       * load1-already-completed branch in map_stage.c). Doing them here would
+       * violate produced_cycle <= consumed_cycle when LOAD2's source happens
+       * to be the destination of a previous fused LOAD2 (whose produce fires
+       * later, when its own LOAD1 completes). */
     } else {
       op->state = OS_IN_ROB;
     }
