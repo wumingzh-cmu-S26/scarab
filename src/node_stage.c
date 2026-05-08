@@ -514,6 +514,11 @@ void node_fill_rob(Stage_Data* src_sd) {
       op->precommitted    = TRUE;
       op->precommit_cycle = cycle_count;
       op->done_cycle      = cycle_count;  /* OP_DONE check uses this */
+      /* dcache_cycle defaults to MAX_CTR (op_pool init). The precommit_update
+       * walker bails on the first MEM_LD with dcache_cycle > cycle_count, so
+       * a LOAD2 in node_head would block precommit of every later op. Stamp
+       * dcache_cycle as if the dcache hit at issue so the walker passes. */
+      op->dcache_cycle    = cycle_count;
     } else {
       op->state = OS_IN_ROB;
     }
