@@ -51,6 +51,10 @@
 #include "model.h"
 #include "op_info.h"
 #include "statistics.h"
+
+/* I-Fuse ideal fusion */
+#include "general.param.h"
+#include "ideal_fusion.h"
 #include "thread.h"
 
 /**************************************************************************************/
@@ -310,6 +314,31 @@ static inline void update_map(Op* op) {
   int ii;
 
   ASSERT(map_data->proc_id, map_data->proc_id == op->proc_id);
+
+  /* I-Fuse ideal fusion: a fused LOAD2 writes reg_map[arch_dst].op = LOAD1
+   * instead of LOAD2, so consumers of LOAD2's arch dst register their wake-up
+   * against LOAD1 and fire when LOAD1 completes. If LOAD1 has been recycled
+   * (Op slot reused since LOAD1 retired), use &invalid_op — add_to_wake_up_lists
+   * recognizes it as "producer already retired" and clears the consumer's
+   * not_rdy bit immediately. */
+  Op*     producer       = op;
+  Counter producer_uniq  = op->unique_num;
+  Counter producer_opnum = op->op_num;
+  if (DO_FUSION && op->fusion_candidate_type == LOAD2 && !op->off_path) {
+    Counter l1_uniq = 0;
+    Op*     l1_op   = ifuse_remap_lookup_load1_op(op->partner_micro_op_num, &l1_uniq);
+    if (l1_op && l1_op->op_pool_valid && l1_op->unique_num == l1_uniq) {
+      producer       = l1_op;
+      producer_uniq  = l1_op->unique_num;
+      producer_opnum = l1_op->op_num;
+    } else {
+      extern Op invalid_op;
+      producer       = &invalid_op;
+      producer_uniq  = invalid_op.unique_num;
+      producer_opnum = invalid_op.op_num;
+    }
+  }
+
   /* update the register map if the op produces a value */
   for (ii = 0; ii < op->inst_info->table_info.num_dest_regs; ii++) {
     uns id = op->inst_info->dests[ii].id;
@@ -321,9 +350,9 @@ static inline void update_map(Op* op) {
     DEBUG(map_data->proc_id, "Writing map  op_num:%s  off_path:%d  id:%d  flag:%d  ind:%d\n", unsstr64(op->op_num),
           op->off_path, id, map_data->map_flags[id], ind);
 
-    map_entry->op = op;
-    map_entry->op_num = op->op_num;
-    map_entry->unique_num = op->unique_num;
+    map_entry->op = producer;
+    map_entry->op_num = producer_opnum;
+    map_entry->unique_num = producer_uniq;
     map_data->map_flags[id] = op->off_path;
   }
 

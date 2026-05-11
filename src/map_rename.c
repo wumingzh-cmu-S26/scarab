@@ -46,6 +46,10 @@
 #include "thread.h"
 #include "xed-interface.h"
 
+/* I-Fuse ideal fusion */
+#include "general.param.h"
+#include "ideal_fusion.h"
+
 /**************************************************************************************/
 /* Extern Definition */
 
@@ -408,6 +412,26 @@ static inline void reg_file_write_dst(Op *op, int self_reg_table_type, int paren
     // update the dst register id into the op
     ASSERT(op->proc_id, op->dst_reg_id[ii][self_reg_table_type] == REG_TABLE_REG_ID_INVALID);
     op->dst_reg_id[ii][self_reg_table_type] = self_reg_id;
+
+    /* I-Fuse ideal fusion: fused LOAD2 never reaches exec_stage to call
+     * reg_file_produce. Mark its dst entry PRODUCED immediately at alloc so
+     * the release-time invariant (onpath_consumed_cycle >= produced_cycle)
+     * trivially holds (any later consumer's exec cycle is > LOAD2's rename
+     * cycle, which is what produced_cycle is set to here). */
+    if (DO_FUSION && op->fusion_candidate_type == LOAD2 &&
+        self_reg_table_type == REG_TABLE_TYPE_PHYSICAL) {
+      reg_table->entries[self_reg_id].reg_state    = REG_TABLE_ENTRY_STATE_PRODUCED;
+      reg_table->entries[self_reg_id].produced_cycle = cycle_count;
+    }
+  }
+
+  /* I-Fuse ideal fusion: AFTER write_dst completes, record LOAD1's Op* +
+   * unique_num so the matching LOAD2's update_map can redirect reg_map.op
+   * to LOAD1 (consumers of LOAD2's arch dst register against LOAD1 and wake
+   * naturally when LOAD1 fires wake_up_ops). */
+  if (DO_FUSION && op != NULL && op->fusion_candidate_type == LOAD1 &&
+      self_reg_table_type == REG_TABLE_TYPE_PHYSICAL) {
+    ifuse_remap_record_load1(op->global_micro_op_num, op, (Counter)op->unique_num);
   }
 }
 
@@ -482,6 +506,11 @@ static inline void reg_file_flush_mispredict(Op *op, int *reg_table_types, int r
 
 // mark the previous entry with same archituctural id before the committed one as dead and remove it
 static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_table_num) {
+  /* I-Fuse ideal fusion: LOAD2 was not registered as a consumer at rename, so
+   * its source entries' onpath_consumers_num may legitimately be 0. Skip the
+   * src-side sanity loop for LOAD2 (no state changes there, just assertions). */
+  Flag ifuse_skip_src = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+  if (!ifuse_skip_src) {
   for (uns ii = 0; ii < op->inst_info->table_info.num_src_regs; ++ii) {
     int reg_type = reg_file_get_reg_type(op->src_reg_id[ii][REG_TABLE_TYPE_ARCHITECTURAL]);
     if (reg_type == REG_FILE_REG_TYPE_OTHER)
@@ -498,6 +527,7 @@ static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_t
 
       ASSERT(op->proc_id, entry != NULL && entry->onpath_consumers_num > 0);
     }
+  }
   }
 
   for (uns ii = 0; ii < op->inst_info->table_info.num_dest_regs; ++ii) {
@@ -674,6 +704,13 @@ void reg_table_entry_read(struct reg_table_entry *entry, Op *op) {
   }
 
   if (op->off_path)
+    return;
+
+  /* I-Fuse ideal fusion: a fused LOAD2 never reaches exec_stage to call
+   * reg_file_consume on its sources, so don't register it as a consumer at
+   * rename either. Keeps the producer entry's consumers_num / consumed_count
+   * balanced. */
+  if (DO_FUSION && op->fusion_candidate_type == LOAD2)
     return;
 
   entry->onpath_consumers_num++;

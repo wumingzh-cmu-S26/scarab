@@ -44,6 +44,8 @@ extern "C" {
 
 #include "exec_ports.h"
 #include "node_stage.h"
+
+#include "ideal_fusion.h"
 }
 
 #include <vector>
@@ -261,6 +263,12 @@ void node_issue_queue_dispatch() {
 
   /* Scan through dispatched nodes in node table that have not been filled to RS yet. */
   for (op = node->next_op_into_rs; op; op = op->next_node) {
+    /* IFUSE: fused LOAD2 was marked OS_DONE at issue and never enters the RS;
+     * walk past without consuming RS_FILL_WIDTH. */
+    if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+      ASSERT(node->proc_id, op->state == OS_DONE);
+      continue;
+    }
     int64 rs_id = dispatch_func_table[NODE_ISSUE_QUEUE_DISPATCH_SCHEME](op);
     if (rs_id == NODE_ISSUE_QUEUE_RS_SLOT_INVALID)
       break;

@@ -286,4 +286,8 @@ DEF_STAT(CYCLES_UOC_IC_SWITCH            , COUNT   , NO_RATIO)
 // Ideal fusion (pass-1 candidate identification)
 DEF_STAT(TOTAL_ON_PATH_MEM_LDS           , COUNT   , NO_RATIO)
 DEF_STAT(NUM_PAIRS_FUSED                 , COUNT   , NO_RATIO)
+/* Pass-2 actuation stats */
+DEF_STAT(NUM_FUSED_PAIRS_IDEAL           , COUNT   , NO_RATIO)
+DEF_STAT(IFUSE_LOAD2_FLUSHED             , COUNT   , NO_RATIO)
+DEF_STAT(IFUSE_LOAD1_NO_LOAD2            , COUNT   , NO_RATIO)
 

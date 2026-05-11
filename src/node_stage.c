@@ -65,6 +65,8 @@
 #include "thread.h"
 #include "xed-iclass-enum.h"
 
+#include "ideal_fusion.h"
+
 /* Macros */
 
 #define DEBUG(proc_id, args...) _DEBUG(proc_id, DEBUG_NODE_STAGE, ##args)
@@ -252,7 +254,10 @@ void flush_window() {
       DEBUG(node->proc_id, "Node window flushing op_num:%llu off_path:%u\n", (unsigned long long)op->op_num,
             op->off_path);
       ASSERT(node->proc_id, op->off_path);
-      if (!op->macro_fused)
+      /* IFUSE: LOAD2 was never counted toward node_count at issue, so it
+       * also shouldn't count toward flush_ops here. */
+      Flag ifuse_skip = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      if (!op->macro_fused && !ifuse_skip)
         flush_ops++;
       ASSERT(node->proc_id, op->off_path);
       ASSERT(node->proc_id, op->op_num > bp_recovery_info->recovery_op_num);
@@ -273,7 +278,9 @@ void flush_window() {
         op->recovery_scheduled = FALSE;
       }
       DEBUG(node->proc_id, "Node keeping  op:%s node_id:%llu\n", unsstr64(op->op_num), op->node_id);
-      if (!op->macro_fused)
+      /* IFUSE: same exclusion as flush_ops above. */
+      Flag ifuse_skip_keep = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      if (!op->macro_fused && !ifuse_skip_keep)
         keep_ops++;
       last = &op->next_node;
       node->node_tail = op;
@@ -444,7 +451,10 @@ void node_fill_rob(Stage_Data* src_sd) {
     if (!op)
       continue;
 
-    if (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST) {
+    /* IFUSE: fused LOAD2 doesn't issue a memory request, so don't take an LSQ slot. */
+    Flag ifuse_skip_lsq = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!ifuse_skip_lsq && (op->inst_info->table_info.mem_type == MEM_LD ||
+                            op->inst_info->table_info.mem_type == MEM_ST)) {
       if (!lsq_available(op->inst_info->table_info.mem_type)) {
         DEBUG(node->proc_id, "Node fill stalled: LSQ full for op_num:%s mem_type:%s src_sd_op_count:%d node_count:%d\n",
               unsstr64(op->op_num), op->inst_info->table_info.mem_type == MEM_LD ? "LD" : "ST", src_sd->op_count,
@@ -486,7 +496,9 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     // Jump uop after CMP or TEST will be fused into one uop
     node_fuse_op(op);
-    if (!op->macro_fused)
+    /* IFUSE: fused LOAD2 doesn't take a node-table slot. */
+    Flag ifuse_skip_count = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!op->macro_fused && !ifuse_skip_count)
       node->node_count++;
 
     ASSERTM(node->proc_id, node->node_count <= NODE_TABLE_SIZE,
@@ -497,7 +509,30 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     DEBUG(node->proc_id, "Issuing the op op_num:%s off_path:%d\n", unsstr64(op->op_num), op->off_path);
 
-    op->state = OS_IN_ROB;
+    /* IFUSE: fused LOAD2 is a no-op — mark it OS_DONE immediately so retire
+     * eats it without going through RS / FU / dcache. Also pre-commit it so
+     * node_precommit_retire's assertion is satisfied (LOAD2 never goes through
+     * the normal node_precommit_update flow because it's already OS_DONE and
+     * may retire before the precommit walker reaches it). */
+    if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+      op->state           = OS_DONE;
+      op->precommitted    = TRUE;
+      op->precommit_cycle = cycle_count;
+      op->done_cycle      = cycle_count;  /* OP_DONE check uses this */
+      /* dcache_cycle defaults to MAX_CTR (op_pool init). The precommit_update
+       * walker bails on the first MEM_LD with dcache_cycle > cycle_count, so
+       * a LOAD2 in node_head would block precommit of every later op. Stamp
+       * dcache_cycle as if the dcache hit at issue so the walker passes. */
+      op->dcache_cycle    = cycle_count;
+      /* LOAD2's reg_file_consume + reg_file_produce are deferred to the
+       * wake_up_ops fusion block in map.c (or to wake_up_ops(LOAD2) in the
+       * load1-already-completed branch in map_stage.c). Doing them here would
+       * violate produced_cycle <= consumed_cycle when LOAD2's source happens
+       * to be the destination of a previous fused LOAD2 (whose produce fires
+       * later, when its own LOAD1 completes). */
+    } else {
+      op->state = OS_IN_ROB;
+    }
 
     /* always stop issuing after a synchronizing op */
     if (op->inst_info->table_info.bar_type & BAR_ISSUE)
@@ -633,7 +668,10 @@ void node_retire() {
 
     node_precommit_retire(op);
 
-    if (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST) {
+    /* IFUSE: fused LOAD2 was never on the LSQ; skip lsq_commit. */
+    Flag ifuse_is_load2 = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (!ifuse_is_load2 &&
+        (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST)) {
       lsq_commit(op);
     }
 
@@ -646,8 +684,8 @@ void node_retire() {
       printf("[ft_free_op] stage=node_stage:retire op_num=%llu op=%p\n", (unsigned long long)op->op_num, (void*)op);
       ft_free_op(op);
     }
-    // the fused op does not occupy the ROB entry
-    if (!macro_fused_saved)
+    // the fused op does not occupy the ROB entry; same is true of IFUSE LOAD2
+    if (!macro_fused_saved && !ifuse_is_load2)
       node->node_count--;
 
     ASSERT(node->proc_id, node->node_count >= 0);
@@ -704,8 +742,21 @@ Flag op_not_ready_for_retire(Op* op) {
 Flag is_node_table_empty() {
   if (node->node_count == 0) {
     if (node->node_head != NULL) {
-      ASSERT(node->proc_id, node->node_head->macro_fused);
-      return FALSE;
+      /* IFUSE: LOAD2 ops sit on the node_head chain but don't count toward
+       * node_count. If everything left in the chain is either macro_fused
+       * or IFUSE LOAD2, the table is logically empty (just waiting on retire
+       * to drain the cosmetic chain). */
+      Flag all_skippable = TRUE;
+      for (Op* o = node->node_head; o; o = o->next_node) {
+        if (o->macro_fused)
+          continue;
+        if (DO_FUSION && o->fusion_candidate_type == LOAD2)
+          continue;
+        all_skippable = FALSE;
+        break;
+      }
+      ASSERT(node->proc_id, all_skippable);
+      return FALSE;  /* not "empty" yet — there are LOAD2/macro_fused ops to retire */
     }
 
     ASSERT(node->proc_id, node->node_head == NULL);
