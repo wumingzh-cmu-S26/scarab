@@ -488,6 +488,7 @@ static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_t
    * sanity-only (no state changes); skip it for LOAD2. The dst commit iteration
    * (after this block) still runs normally. */
   Flag ifuse_skip_src = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+  if (ifuse_skip_src) STAT_EVENT(op->proc_id, IFUSE_AUDIT_RELEASE_SRC_SKIP);
   if (!ifuse_skip_src) {
   for (uns ii = 0; ii < op->inst_info->table_info.num_src_regs; ++ii) {
     int reg_type = reg_file_get_reg_type(op->src_reg_id[ii][REG_TABLE_TYPE_ARCHITECTURAL]);
@@ -690,6 +691,7 @@ void reg_table_entry_read(struct reg_table_entry *entry, Op *op) {
    * requiring a fake-consume call (which causes produced_cycle vs consumed_cycle
    * ordering violations when LOAD2's source is itself produced later). */
   if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+    STAT_EVENT(op->proc_id, IFUSE_AUDIT_CONSUMER_SKIP);
     return;
   }
 

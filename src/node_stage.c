@@ -257,6 +257,7 @@ void flush_window() {
       /* IFUSE: LOAD2 was never counted toward node_count at issue, so it
        * also shouldn't count toward flush_ops here. */
       Flag ifuse_skip = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      if (ifuse_skip) STAT_EVENT(node->proc_id, IFUSE_AUDIT_FLUSH_WINDOW);
       if (!op->macro_fused && !ifuse_skip)
         flush_ops++;
       ASSERT(node->proc_id, op->off_path);
@@ -453,6 +454,10 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     /* IFUSE: fused LOAD2 doesn't issue a memory request, so don't take an LSQ slot. */
     Flag ifuse_skip_lsq = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (ifuse_skip_lsq) {
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_NODE_ISSUE);
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_LSQ_DISPATCH_SKIP);
+    }
     if (!ifuse_skip_lsq && (op->inst_info->table_info.mem_type == MEM_LD ||
                             op->inst_info->table_info.mem_type == MEM_ST)) {
       if (!lsq_available(op->inst_info->table_info.mem_type)) {
@@ -498,6 +503,7 @@ void node_fill_rob(Stage_Data* src_sd) {
     node_fuse_op(op);
     /* IFUSE: fused LOAD2 doesn't take a node-table slot. */
     Flag ifuse_skip_count = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (ifuse_skip_count) STAT_EVENT(op->proc_id, IFUSE_AUDIT_NODECOUNT_SKIP);
     if (!op->macro_fused && !ifuse_skip_count)
       node->node_count++;
 
@@ -515,6 +521,7 @@ void node_fill_rob(Stage_Data* src_sd) {
      * the normal node_precommit_update flow because it's already OS_DONE and
      * may retire before the precommit walker reaches it). */
     if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_SET_OS_DONE);
       op->state           = OS_DONE;
       op->precommitted    = TRUE;
       op->precommit_cycle = cycle_count;
@@ -670,6 +677,10 @@ void node_retire() {
 
     /* IFUSE: fused LOAD2 was never on the LSQ; skip lsq_commit. */
     Flag ifuse_is_load2 = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    if (ifuse_is_load2) {
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_RETIRE);
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_LSQ_COMMIT_SKIP);
+    }
     if (!ifuse_is_load2 &&
         (op->inst_info->table_info.mem_type == MEM_LD || op->inst_info->table_info.mem_type == MEM_ST)) {
       lsq_commit(op);

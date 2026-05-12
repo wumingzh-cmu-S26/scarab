@@ -317,6 +317,7 @@ static inline void ifuse_map_handle(Op* op) {
     return;
 
   if (op->fusion_candidate_type == LOAD1) {
+    STAT_EVENT(op->proc_id, IFUSE_AUDIT_BUFFER_CREATE_L1);
     Counter          load1_gmon = (Counter)op->global_micro_op_num;
     Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
     if (!node) {
@@ -327,6 +328,7 @@ static inline void ifuse_map_handle(Op* op) {
      * not actually recur, since gmons are monotonically assigned at fetch) just
      * reuses the slot. */
   } else if (op->fusion_candidate_type == LOAD2) {
+    STAT_EVENT(op->proc_id, IFUSE_AUDIT_BUFFER_POPULATE_L2);
     Counter          load1_gmon = (Counter)op->partner_micro_op_num;
     Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
     if (!node) {
@@ -341,12 +343,8 @@ static inline void ifuse_map_handle(Op* op) {
 
     if (node->entry.load1_completed) {
       /* LOAD1 already finished while LOAD2 was upstream; LOAD1's wake_up
-       * skipped LOAD2's deps because LOAD2 wasn't here yet. Wake them now,
-       * then clean up the entry. cmp_wake reads src_op->wake_cycle to set
-       * dep_op->rdy_cycle, so inherit LOAD1's wake_cycle (saved in the buffer
-       * by wake_up_ops). wake_up_ops auto-calls reg_file_produce internally
-       * on LOAD2. LOAD2 wasn't registered as a consumer at rename, so no
-       * consume call is needed. */
+       * skipped LOAD2's deps because LOAD2 wasn't here yet. Wake them now. */
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_L1_WAKE_LATE_L2);
       op->wake_cycle = node->entry.load1_wake_cycle;
       op->done_cycle = node->entry.load1_done_cycle;
       wake_up_ops(op, REG_DATA_DEP, model->wake_hook);

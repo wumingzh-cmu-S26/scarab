@@ -267,6 +267,7 @@ void node_issue_queue_dispatch() {
      * walk past without consuming RS_FILL_WIDTH. */
     if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
       ASSERT(node->proc_id, op->state == OS_DONE);
+      STAT_EVENT(op->proc_id, IFUSE_AUDIT_RS_FILL_SKIP);
       continue;
     }
     int64 rs_id = dispatch_func_table[NODE_ISSUE_QUEUE_DISPATCH_SCHEME](op);

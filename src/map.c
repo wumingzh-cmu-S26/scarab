@@ -582,6 +582,7 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
       if (load2->op_pool_valid &&
           load2->unique_num == node->entry.load2_unique_num &&
           load2->fusion_candidate_type == LOAD2) {
+        STAT_EVENT(op->proc_id, IFUSE_AUDIT_L1_WAKE_L2_WAITING);
         /* IFUSE: cmp_wake reads src_op->wake_cycle to set dep_op->rdy_cycle.
          * LOAD2 never went through dcache/exec_stage, so its wake_cycle is
          * still MAX_CTR (op_pool init). Inherit LOAD1's wake_cycle so deps
