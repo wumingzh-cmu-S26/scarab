@@ -122,7 +122,6 @@ static inline void expand_wake_up_entries(void);
 static inline void update_store_hash(Op* op);
 static inline Op* add_store_deps(Op* op);
 static inline void update_map_entry(Op* op, Map_Entry* map_entry);
-static inline Flag ifuse_is_fused_load2(Op* op);
 static inline Flag ifuse_load2_map_producer(Op* op, Op** producer, Counter* producer_opnum, Counter* producer_uniq);
 static inline void recover_mem_map_entry(void* hash_entry, void* arg);
 
@@ -295,9 +294,6 @@ static inline void read_store_map(Op* op) {
   if (!MEM_OBEY_STORE_DEP || MEM_OOO_STORES)
     return;
 
-  if (ifuse_is_fused_load2(op))
-    return;
-
   if (op->inst_info->table_info.mem_type) {
     uns ind = map_data->last_store_flag;
     Map_Entry* map_entry = &map_data->last_store[ind];
@@ -341,7 +337,7 @@ static inline void update_map(Op* op) {
   UNUSED(ifuse_remapped);
 
   /* update the map if the op is a store */
-  if (!ifuse_is_fused_load2(op) && op->inst_info->table_info.mem_type == MEM_ST) {
+  if (op->inst_info->table_info.mem_type == MEM_ST) {
     uns ind = op->off_path;
     Map_Entry* map_entry = &map_data->last_store[ind];
 
@@ -354,12 +350,8 @@ static inline void update_map(Op* op) {
   }
 }
 
-static inline Flag ifuse_is_fused_load2(Op* op) {
-  return DO_FUSION && op && !op->off_path && op->fusion_candidate_type == LOAD2;
-}
-
 static inline Flag ifuse_load2_map_producer(Op* op, Op** producer, Counter* producer_opnum, Counter* producer_uniq) {
-  if (!ifuse_is_fused_load2(op))
+  if (!DO_FUSION || op->off_path || op->fusion_candidate_type != LOAD2)
     return FALSE;
 
   Load2BufferNode* node = find_load2_buffer_node((Counter)op->partner_micro_op_num,
@@ -403,8 +395,6 @@ inline void update_map_entry(Op* op, Map_Entry* map_entry) {
 
 void map_mem_dep(Op* op) {
   if (!MEM_OBEY_STORE_DEP)
-    return;
-  if (ifuse_is_fused_load2(op))
     return;
   if (op->inst_info->table_info.mem_type == MEM_ST)
     update_store_hash(op);
