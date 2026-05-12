@@ -232,6 +232,7 @@ struct Op_struct {
   unsigned int        partner_micro_op_num;      // partner's gmon (LOAD2 stores LOAD1's, vice versa)
   Flag                load1_woke_up_dependents;  // tracking flag (init FALSE)
   Flag                load2_woke_up_dependents;  // tracking flag (init FALSE)
+  Flag                ifuse_load2_prf_aliased;   // LOAD2 reuses LOAD1's PRF entry instead of allocating
   // }}}
 
   /*------------------------------------------------------------------------------------*/

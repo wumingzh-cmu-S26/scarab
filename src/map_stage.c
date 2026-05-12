@@ -73,6 +73,7 @@ Map_Stage* map = NULL;
 static inline void stage_process_op(Op*);
 static inline void map_stage_collect_stat(Flag, Flag);
 static inline void map_stage_fetch_op(Stage_Data*);
+static inline uns ifuse_reg_file_op_count(Stage_Data*);
 static inline void ifuse_collect_map_reg_stall(Stage_Data*);
 
 /**************************************************************************************/
@@ -195,7 +196,9 @@ void debug_map_stage() {
 
 void update_map_stage(Stage_Data* src_sd) {
   /* stall if the renaming table is full */
-  if (!reg_file_available(STAGE_MAX_OP_COUNT)) {
+  uns  reg_file_op_count = ifuse_reg_file_op_count(src_sd);
+  Flag reg_file_ok       = reg_file_available(reg_file_op_count);
+  if (!reg_file_ok) {
     ifuse_collect_map_reg_stall(src_sd);
     map->reg_file_stall = TRUE;
     DEBUG(map->proc_id,
@@ -206,6 +209,8 @@ void update_map_stage(Stage_Data* src_sd) {
     STAT_EVENT(map->proc_id, MAP_STAGE_STALL_ITSELF);
     return;
   }
+  if (reg_file_op_count < STAGE_MAX_OP_COUNT && !reg_file_available(STAGE_MAX_OP_COUNT))
+    STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_AVOIDED_LOAD2_PRF);
   map->reg_file_stall = FALSE;
   STAT_EVENT(map->proc_id, MAP_STAGE_NOT_STALL_ITSELF);
 
@@ -277,6 +282,16 @@ static inline Op* ifuse_first_stage_op(Stage_Data* sd) {
       return sd->ops[ii];
   }
   return NULL;
+}
+
+static inline uns ifuse_reg_file_op_count(Stage_Data* src_sd) {
+  if (!DO_FUSION)
+    return STAGE_MAX_OP_COUNT;
+
+  uns load2_count = ifuse_count_fused_load2(src_sd);
+  if (load2_count >= STAGE_MAX_OP_COUNT)
+    return 0;
+  return STAGE_MAX_OP_COUNT - load2_count;
 }
 
 static inline void ifuse_collect_map_reg_stall(Stage_Data* src_sd) {
@@ -372,6 +387,8 @@ static inline void ifuse_map_handle(Op* op) {
     if (!node) {
       node = create_load2_buffer_node(load1_gmon, load1_gmon);
     }
+    node->entry.load1            = op;
+    node->entry.load1_unique_num = op->unique_num;
     /* If node already existed, leave its state alone — earlier instance from
      * before a recovery may have populated it; this new LOAD1 (same gmon should
      * not actually recur, since gmons are monotonically assigned at fetch) just
