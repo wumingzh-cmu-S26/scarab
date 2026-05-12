@@ -254,11 +254,9 @@ void flush_window() {
       DEBUG(node->proc_id, "Node window flushing op_num:%llu off_path:%u\n", (unsigned long long)op->op_num,
             op->off_path);
       ASSERT(node->proc_id, op->off_path);
-      /* IFUSE: LOAD2 was never counted toward node_count at issue, so it
-       * also shouldn't count toward flush_ops here. */
-      Flag ifuse_skip = (DO_FUSION && op->fusion_candidate_type == LOAD2);
-      if (ifuse_skip) STAT_EVENT(node->proc_id, IFUSE_AUDIT_FLUSH_WINDOW);
-      if (!op->macro_fused && !ifuse_skip)
+      if (DO_FUSION && op->fusion_candidate_type == LOAD2)
+        STAT_EVENT(node->proc_id, IFUSE_AUDIT_FLUSH_WINDOW);
+      if (!op->macro_fused)
         flush_ops++;
       ASSERT(node->proc_id, op->off_path);
       ASSERT(node->proc_id, op->op_num > bp_recovery_info->recovery_op_num);
@@ -279,9 +277,7 @@ void flush_window() {
         op->recovery_scheduled = FALSE;
       }
       DEBUG(node->proc_id, "Node keeping  op:%s node_id:%llu\n", unsstr64(op->op_num), op->node_id);
-      /* IFUSE: same exclusion as flush_ops above. */
-      Flag ifuse_skip_keep = (DO_FUSION && op->fusion_candidate_type == LOAD2);
-      if (!op->macro_fused && !ifuse_skip_keep)
+      if (!op->macro_fused)
         keep_ops++;
       last = &op->next_node;
       node->node_tail = op;
@@ -501,10 +497,11 @@ void node_fill_rob(Stage_Data* src_sd) {
 
     // Jump uop after CMP or TEST will be fused into one uop
     node_fuse_op(op);
-    /* IFUSE: fused LOAD2 doesn't take a node-table slot. */
+    /* IFUSE: fused LOAD2 still occupies node-table capacity, matching the
+     * reference implementation's backpressure, but it skips LSQ/RS/execute. */
     Flag ifuse_skip_count = (DO_FUSION && op->fusion_candidate_type == LOAD2);
     if (ifuse_skip_count) STAT_EVENT(op->proc_id, IFUSE_AUDIT_NODECOUNT_SKIP);
-    if (!op->macro_fused && !ifuse_skip_count)
+    if (!op->macro_fused)
       node->node_count++;
 
     ASSERTM(node->proc_id, node->node_count <= NODE_TABLE_SIZE,
@@ -695,8 +692,8 @@ void node_retire() {
       printf("[ft_free_op] stage=node_stage:retire op_num=%llu op=%p\n", (unsigned long long)op->op_num, (void*)op);
       ft_free_op(op);
     }
-    // the fused op does not occupy the ROB entry; same is true of IFUSE LOAD2
-    if (!macro_fused_saved && !ifuse_is_load2)
+    // macro-fused ops do not occupy an additional ROB entry.
+    if (!macro_fused_saved)
       node->node_count--;
 
     ASSERT(node->proc_id, node->node_count >= 0);
@@ -753,15 +750,12 @@ Flag op_not_ready_for_retire(Op* op) {
 Flag is_node_table_empty() {
   if (node->node_count == 0) {
     if (node->node_head != NULL) {
-      /* IFUSE: LOAD2 ops sit on the node_head chain but don't count toward
-       * node_count. If everything left in the chain is either macro_fused
-       * or IFUSE LOAD2, the table is logically empty (just waiting on retire
-       * to drain the cosmetic chain). */
+      /* Macro-fused ops sit on the node_head chain but don't count toward
+       * node_count. If everything left in the chain is macro-fused, the table
+       * is logically empty (just waiting on retire to drain the cosmetic chain). */
       Flag all_skippable = TRUE;
       for (Op* o = node->node_head; o; o = o->next_node) {
         if (o->macro_fused)
-          continue;
-        if (DO_FUSION && o->fusion_candidate_type == LOAD2)
           continue;
         all_skippable = FALSE;
         break;
