@@ -122,7 +122,6 @@ static inline void expand_wake_up_entries(void);
 static inline void update_store_hash(Op* op);
 static inline Op* add_store_deps(Op* op);
 static inline void update_map_entry(Op* op, Map_Entry* map_entry);
-static inline Flag ifuse_load2_map_producer(Op* op, Op** producer, Counter* producer_opnum, Counter* producer_uniq);
 static inline void recover_mem_map_entry(void* hash_entry, void* arg);
 
 /* memory map hash traversal */
@@ -311,10 +310,6 @@ static inline void read_store_map(Op* op) {
 
 static inline void update_map(Op* op) {
   int ii;
-  Op*     producer       = op;
-  Counter producer_opnum = op->op_num;
-  Counter producer_uniq  = op->unique_num;
-  Flag    ifuse_remapped = ifuse_load2_map_producer(op, &producer, &producer_opnum, &producer_uniq);
 
   ASSERT(map_data->proc_id, map_data->proc_id == op->proc_id);
   /* update the register map if the op produces a value */
@@ -328,13 +323,11 @@ static inline void update_map(Op* op) {
     DEBUG(map_data->proc_id, "Writing map  op_num:%s  off_path:%d  id:%d  flag:%d  ind:%d\n", unsstr64(op->op_num),
           op->off_path, id, map_data->map_flags[id], ind);
 
-    map_entry->op = producer;
-    map_entry->op_num = producer_opnum;
-    map_entry->unique_num = producer_uniq;
+    map_entry->op = op;
+    map_entry->op_num = op->op_num;
+    map_entry->unique_num = op->unique_num;
     map_data->map_flags[id] = op->off_path;
   }
-
-  UNUSED(ifuse_remapped);
 
   /* update the map if the op is a store */
   if (op->inst_info->table_info.mem_type == MEM_ST) {
@@ -348,34 +341,6 @@ static inline void update_map(Op* op) {
     map_entry->unique_num = op->unique_num;
     map_data->last_store_flag = op->off_path;
   }
-}
-
-static inline Flag ifuse_load2_map_producer(Op* op, Op** producer, Counter* producer_opnum, Counter* producer_uniq) {
-  if (!DO_FUSION || op->off_path || op->fusion_candidate_type != LOAD2)
-    return FALSE;
-
-  Load2BufferNode* node = find_load2_buffer_node((Counter)op->partner_micro_op_num,
-                                                 (Counter)op->partner_micro_op_num);
-  if (!node || !node->entry.load1) {
-    STAT_EVENT(op->proc_id, IFUSE_LOAD2_REG_MAP_REMAP_FAIL);
-    return FALSE;
-  }
-
-  Op* load1 = node->entry.load1;
-  if (load1->op_pool_valid && load1->unique_num == node->entry.load1_unique_num &&
-      load1->fusion_candidate_type == LOAD1) {
-    *producer       = load1;
-    *producer_opnum = load1->op_num;
-    *producer_uniq  = load1->unique_num;
-    STAT_EVENT(op->proc_id, IFUSE_LOAD2_REG_MAP_REMAP);
-    return TRUE;
-  }
-
-  *producer       = &invalid_op;
-  *producer_opnum = 0;
-  *producer_uniq  = 0;
-  STAT_EVENT(op->proc_id, IFUSE_LOAD2_REG_MAP_REMAP_RETIRED);
-  return TRUE;
 }
 
 /**************************************************************************************/
