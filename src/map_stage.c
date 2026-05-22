@@ -73,6 +73,8 @@ Map_Stage* map = NULL;
 static inline void stage_process_op(Op*);
 static inline void map_stage_collect_stat(Flag, Flag);
 static inline void map_stage_fetch_op(Stage_Data*);
+static inline uns ifuse_reg_file_op_count(Stage_Data*);
+static inline void ifuse_collect_map_reg_stall(Stage_Data*);
 
 /**************************************************************************************/
 /* set_map_stage: */
@@ -194,7 +196,10 @@ void debug_map_stage() {
 
 void update_map_stage(Stage_Data* src_sd) {
   /* stall if the renaming table is full */
-  if (!reg_file_available(STAGE_MAX_OP_COUNT)) {
+  uns  reg_file_op_count = ifuse_reg_file_op_count(src_sd);
+  Flag reg_file_ok       = reg_file_available(reg_file_op_count);
+  if (!reg_file_ok) {
+    ifuse_collect_map_reg_stall(src_sd);
     map->reg_file_stall = TRUE;
     DEBUG(map->proc_id,
           "Map Stage stalled (reg_file_full) last_sd_op_num:%s last_sd_op_count:%d src_op_num:%s src_op_count:%d\n",
@@ -204,6 +209,8 @@ void update_map_stage(Stage_Data* src_sd) {
     STAT_EVENT(map->proc_id, MAP_STAGE_STALL_ITSELF);
     return;
   }
+  if (reg_file_op_count < STAGE_MAX_OP_COUNT && !reg_file_available(STAGE_MAX_OP_COUNT))
+    STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_AVOIDED_LOAD2_PRF);
   map->reg_file_stall = FALSE;
   STAT_EVENT(map->proc_id, MAP_STAGE_NOT_STALL_ITSELF);
 
@@ -244,6 +251,63 @@ void update_map_stage(Stage_Data* src_sd) {
     Op* op = map->last_sd->ops[ii];
     ASSERT(map->proc_id, op != NULL);
     stage_process_op(op);
+  }
+}
+
+/**************************************************************************************/
+/* IFUSE diagnostics */
+
+static inline Flag ifuse_is_fused_load2(Op* op) {
+  return DO_FUSION && op && !op->off_path && op->fusion_candidate_type == LOAD2;
+}
+
+static inline uns ifuse_count_fused_load2(Stage_Data* sd) {
+  if (!sd)
+    return 0;
+
+  uns count = 0;
+  for (uns ii = 0; ii < sd->max_op_count; ii++) {
+    if (ifuse_is_fused_load2(sd->ops[ii]))
+      count++;
+  }
+  return count;
+}
+
+static inline Op* ifuse_first_stage_op(Stage_Data* sd) {
+  if (!sd)
+    return NULL;
+
+  for (uns ii = 0; ii < sd->max_op_count; ii++) {
+    if (sd->ops[ii])
+      return sd->ops[ii];
+  }
+  return NULL;
+}
+
+static inline uns ifuse_reg_file_op_count(Stage_Data* src_sd) {
+  if (!DO_FUSION)
+    return STAGE_MAX_OP_COUNT;
+
+  uns load2_count = ifuse_count_fused_load2(src_sd);
+  if (load2_count >= STAGE_MAX_OP_COUNT)
+    return 0;
+  return STAGE_MAX_OP_COUNT - load2_count;
+}
+
+static inline void ifuse_collect_map_reg_stall(Stage_Data* src_sd) {
+  if (!DO_FUSION)
+    return;
+
+  uns src_load2  = ifuse_count_fused_load2(src_sd);
+  uns pipe_load2 = ifuse_count_fused_load2(map->last_sd);
+
+  if (src_load2 || pipe_load2) {
+    STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_WITH_LOAD2);
+    INC_STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_LOAD2_IN_SRC, src_load2);
+    INC_STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_LOAD2_IN_PIPE, pipe_load2);
+
+    if (ifuse_is_fused_load2(ifuse_first_stage_op(src_sd)))
+      STAT_EVENT(map->proc_id, IFUSE_MAP_REG_STALL_LOAD2_AT_SRC_HEAD);
   }
 }
 
@@ -323,6 +387,8 @@ static inline void ifuse_map_handle(Op* op) {
     if (!node) {
       node = create_load2_buffer_node(load1_gmon, load1_gmon);
     }
+    node->entry.load1            = op;
+    node->entry.load1_unique_num = op->unique_num;
     /* If node already existed, leave its state alone — earlier instance from
      * before a recovery may have populated it; this new LOAD1 (same gmon should
      * not actually recur, since gmons are monotonically assigned at fetch) just

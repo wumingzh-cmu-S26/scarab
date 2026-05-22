@@ -57,6 +57,8 @@ typedef struct DoFusionMetadata {
  * problem (Op* may be reused after a pipeline flush) is guarded by snapshotting
  * load2->unique_num and verifying identity before dereference. */
 typedef struct Load2BufferEntry {
+  Op*     load1;                              // pointer to LOAD1 op (set when LOAD1 enters map_stage)
+  Counter load1_unique_num;                   // identity snapshot for recycling check
   Op*     load2;                              // pointer to LOAD2 op (NULL until LOAD2 enters map_stage)
   Counter load2_unique_num;                   // identity snapshot for recycling check
   Flag    load2_waiting;                      // LOAD2 has registered and is waiting on LOAD1

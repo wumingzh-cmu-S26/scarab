@@ -37,6 +37,7 @@
 
 #include "debug/debug.param.h"
 
+#include "ideal_fusion.h"
 #include "isa/isa.h"
 #include "isa/isa_macros.h"
 
@@ -158,6 +159,40 @@ static inline Flag reg_file_check_reg_num(uns reg_table_type, uns op_count) {
       return FALSE;
   }
   return TRUE;
+}
+
+static inline Flag ifuse_is_fused_load2(Op *op) {
+  return DO_FUSION && op && !op->off_path && op->fusion_candidate_type == LOAD2;
+}
+
+static inline Flag ifuse_find_load2_alias_reg(Op *op, int self_reg_table_type, int reg_type, int *alias_reg_id) {
+  if (!ifuse_is_fused_load2(op))
+    return FALSE;
+
+  Load2BufferNode *node = find_load2_buffer_node((Counter)op->partner_micro_op_num,
+                                                 (Counter)op->partner_micro_op_num);
+  if (!node || !node->entry.load1)
+    return FALSE;
+
+  Op *load1 = node->entry.load1;
+  if (!load1->op_pool_valid || load1->unique_num != node->entry.load1_unique_num ||
+      load1->fusion_candidate_type != LOAD1)
+    return FALSE;
+
+  for (uns ii = 0; ii < load1->inst_info->table_info.num_dest_regs; ++ii) {
+    int load1_reg_type = reg_file_get_reg_type(load1->dst_reg_id[ii][REG_TABLE_TYPE_ARCHITECTURAL]);
+    if (load1_reg_type != reg_type)
+      continue;
+
+    int candidate = load1->dst_reg_id[ii][self_reg_table_type];
+    if (candidate == REG_TABLE_REG_ID_INVALID)
+      continue;
+
+    *alias_reg_id = candidate;
+    return TRUE;
+  }
+
+  return FALSE;
 }
 
 // extract the valid architectural register id into the op from inst info
@@ -396,6 +431,22 @@ static inline void reg_file_write_dst(Op *op, int self_reg_table_type, int paren
     ASSERT(op->proc_id, op->prev_dst_reg_id[ii][self_reg_table_type] == REG_TABLE_REG_ID_INVALID);
     op->prev_dst_reg_id[ii][self_reg_table_type] = reg_table->parent_reg_table->entries[parent_reg_id].child_reg_id;
 
+    int alias_reg_id = REG_TABLE_REG_ID_INVALID;
+    if (ifuse_find_load2_alias_reg(op, self_reg_table_type, reg_type, &alias_reg_id)) {
+      struct reg_table_entry *alias_entry = &reg_table->entries[alias_reg_id];
+      if (alias_entry->reg_state != REG_TABLE_ENTRY_STATE_FREE) {
+        alias_entry->num_refs++;
+        reg_table->parent_reg_table->entries[parent_reg_id].child_reg_id = alias_reg_id;
+        ASSERT(op->proc_id, op->dst_reg_id[ii][self_reg_table_type] == REG_TABLE_REG_ID_INVALID);
+        op->dst_reg_id[ii][self_reg_table_type] = alias_reg_id;
+        op->ifuse_load2_prf_aliased = TRUE;
+        STAT_EVENT(op->proc_id, IFUSE_LOAD2_PRF_ALIAS);
+        continue;
+      }
+    }
+    if (ifuse_is_fused_load2(op))
+      STAT_EVENT(op->proc_id, IFUSE_LOAD2_PRF_ALIAS_FAIL);
+
     // allocate the dst register and write meta info
     int self_reg_id = reg_table->ops->alloc(reg_table, op, parent_reg_id);
 
@@ -431,6 +482,11 @@ static inline void reg_file_consume_src(Op *op, int *reg_table_types, int reg_ta
 }
 
 static inline void reg_file_produce_dst(Op *op, int *reg_table_types, int reg_table_num) {
+  if (ifuse_is_fused_load2(op) && op->ifuse_load2_prf_aliased) {
+    STAT_EVENT(op->proc_id, IFUSE_LOAD2_PRF_ALIAS_PRODUCE_SKIP);
+    return;
+  }
+
   for (uns ii = 0; ii < op->inst_info->table_info.num_dest_regs; ++ii) {
     int reg_type = reg_file_get_reg_type(op->dst_reg_id[ii][REG_TABLE_TYPE_ARCHITECTURAL]);
     if (reg_type == REG_FILE_REG_TYPE_OTHER)
@@ -523,11 +579,14 @@ static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_t
       struct reg_table *reg_table = map_data->reg_file[reg_type]->reg_table[table_type];
       struct reg_table_entry *entry = &reg_table->entries[reg_id];
       ASSERT(op->proc_id, entry != NULL);
-      ASSERT(op->proc_id, entry->reg_state == REG_TABLE_ENTRY_STATE_PRODUCED || REG_RENAMING_MOVE_ELIMINATE);
+      ASSERT(op->proc_id, entry->reg_state == REG_TABLE_ENTRY_STATE_PRODUCED || REG_RENAMING_MOVE_ELIMINATE ||
+                              (op->ifuse_load2_prf_aliased && entry->reg_state == REG_TABLE_ENTRY_STATE_COMMIT));
 
       // mark register as committed at retirement
       ASSERT(op->proc_id,
              reg_table->parent_reg_table->entries[entry->parent_reg_id].child_reg_id != REG_TABLE_REG_ID_INVALID);
+      if (op->ifuse_load2_prf_aliased)
+        STAT_EVENT(op->proc_id, IFUSE_LOAD2_PRF_ALIAS_COMMIT);
       entry->reg_state = REG_TABLE_ENTRY_STATE_COMMIT;
 
       int prev_reg_id = op->prev_dst_reg_id[ii][table_type];
