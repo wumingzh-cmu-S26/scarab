@@ -468,7 +468,7 @@ static Ideal_Fusion_Load_Candidate* find_matching_load1(Op* load2) {
         access_fits_in_cache_block(load1->virtual_addr, load1->mem_size) &&
         access_fits_in_cache_block(load2->oracle_info.va,
                                    load2->oracle_info.mem_size) &&
-        load2->ideal_fusion_micro_op_num - load1->micro_op_num <=
+        load2->ideal_fusion_micro_op_num - load1->micro_op_num <
           IDEAL_FUSION_DISTANCE)
       return load1;
   }
@@ -540,7 +540,7 @@ static void cleanup_stale_loads(Counter current_micro_op_num) {
 
     while (*candidate) {
       if ((*candidate)->fused ||
-          current_micro_op_num - (*candidate)->micro_op_num >
+          current_micro_op_num - (*candidate)->micro_op_num >=
             IDEAL_FUSION_DISTANCE) {
         Ideal_Fusion_Load_Candidate* stale_candidate = *candidate;
         *candidate = stale_candidate->next;
