@@ -230,9 +230,12 @@ struct Op_struct {
   unsigned int        global_micro_op_num;       // monotonic on-path counter; matches CSV gmons
   FusionCandidateType fusion_candidate_type;     // NOT_FUSION_CANDIDATE / LOAD1 / LOAD2
   unsigned int        partner_micro_op_num;      // partner's gmon (LOAD2 stores LOAD1's, vice versa)
+  Flag                ifuse_load2_bypass;        // this LOAD1/LOAD2 pair bypasses LOAD2 backend execution
   Flag                load1_woke_up_dependents;  // tracking flag (init FALSE)
   Flag                load2_woke_up_dependents;  // tracking flag (init FALSE)
   Flag                ifuse_load2_prf_aliased;   // LOAD2 reuses LOAD1's PRF entry instead of allocating
+  Flag                ifuse_load2_reg_produced;   // LOAD2 dst was produced for rename bookkeeping
+  Flag                ifuse_private_inst_info;    // op owns rewritten Inst_Info copy
   // }}}
 
   /*------------------------------------------------------------------------------------*/

@@ -455,6 +455,19 @@ static inline void exec_stage_dep_wakeup(Op* op) {
 
   // non-memory ops will always distribute their results after the op's latency
   if (op->inst_info->table_info.mem_type == NOT_MEM) {
+    if (DO_FUSION && IFUSE_LOAD2_DEP_BYPASS &&
+        op->fusion_candidate_type == LOAD2) {
+      /* Reference ideal fusion does not let LOAD2 produce normally. LOAD2's
+       * dependents are woken through LOAD1 via the fusion buffer. The register
+       * table still needs a produced destination before LOAD2 can retire, but
+       * wake_up_signaled must remain false so later consumers do not observe a
+       * false-ready value before LOAD1 has completed. */
+      if (!op->ifuse_load2_reg_produced) {
+        reg_file_produce(op);
+        op->ifuse_load2_reg_produced = TRUE;
+      }
+      return;
+    }
     op->wake_cycle = exec_cycle;
     wake_up_ops(op, REG_DATA_DEP, model->wake_hook);
     return;

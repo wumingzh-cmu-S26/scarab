@@ -14,14 +14,16 @@
  *
  * Pass 2 (--do_fusion 1 --fusion_candidates_file=<csv>) — reads the CSV,
  *   tags each LOAD1/LOAD2 op at fetch via global_micro_op_num lookup, rewrites
- *   LOAD2 as a NOP, and coordinates LOAD2's dependent wakeup off LOAD1's
- *   completion via the Load2 buffer (managed in map_stage.c / map.c).
+ *   LOAD2 into private NOT_MEM metadata to prevent memory requests, and by
+ *   default bypasses LOAD2 backend execution resources while LOAD1 wakes
+ *   LOAD2's dependents through the Load2 buffer.
  */
 
 #ifndef __IDEAL_FUSION_H__
 #define __IDEAL_FUSION_H__
 
 #include "globals/global_types.h"
+#include "general.param.h"
 #include "op.h"
 
 #ifdef __cplusplus
@@ -42,12 +44,18 @@ void ideal_fusion_finish(void);
 typedef struct DoFusionMetadata {
   unsigned int global_micro_op_num;
   unsigned int partner_load_global_micro_op_num;
+  Counter      actual_global_micro_op_num;
+  Counter      partner_actual_global_micro_op_num;
   Flag         is_load1;
+  Flag         consumed;
   Addr         pc_addr;
   Addr         partner_pc_addr;
   Addr         block_offset;
   Addr         partner_block_offset;
-  struct DoFusionMetadata* next;
+  Flag         force_load2_pipeline;
+  struct DoFusionMetadata* partner;
+  struct DoFusionMetadata* next_gmon;
+  struct DoFusionMetadata* next_pc;
 } DoFusionMetadata;
 
 /* Load2 buffer entry — coordinates LOAD1 completion with LOAD2 dependent wakeup.

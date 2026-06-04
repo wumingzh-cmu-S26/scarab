@@ -555,14 +555,20 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
           disasm_op(op, TRUE), op->off_path);
 
   // write back the register value for the dependent ops
-  reg_file_produce(op);
+  if (!(DO_FUSION && op->fusion_candidate_type == LOAD2 &&
+        op->ifuse_load2_reg_produced)) {
+    reg_file_produce(op);
+    if (DO_FUSION && op->fusion_candidate_type == LOAD2)
+      op->ifuse_load2_reg_produced = TRUE;
+  }
 
   ASSERT(op->proc_id, wake_action);
 
   /* IFUSE: when LOAD1 of a fused pair completes, also wake LOAD2's dependents
    * via the Load2 buffer rendezvous. Order doesn't matter relative to LOAD1's
    * own wakeup loop below; we do it first to mirror the reference. */
-  if (DO_FUSION && type == REG_DATA_DEP && !op->off_path &&
+  if (DO_FUSION && (op->ifuse_load2_bypass || IFUSE_LOAD2_DEP_BYPASS) &&
+      type == REG_DATA_DEP && !op->off_path &&
       op->fusion_candidate_type == LOAD1) {
     Counter          load1_gmon = (Counter)op->global_micro_op_num;
     Load2BufferNode* node       = find_load2_buffer_node(load1_gmon, load1_gmon);
@@ -589,11 +595,14 @@ void wake_up_ops(Op* op, Dep_Type type, void (*wake_action)(Op*, Op*, uns)) {
          * actually become ready. Also stamp done_cycle for OP_DONE() callers. */
         load2->wake_cycle = op->wake_cycle;
         load2->done_cycle = op->done_cycle;
-        /* IFUSE: LOAD2 was never registered as a consumer at rename
-         * (reg_table_entry_read returns early for LOAD2), so we don't need
-         * a fake reg_file_consume here. We do still need to transition
-         * LOAD2's dst entry ALLOC -> PRODUCED so commit doesn't assert. */
-        reg_file_produce(load2);
+        /* Transition LOAD2's dst entry ALLOC -> PRODUCED once. Full
+         * resource-bypass LOAD2 never reaches exec; dep-bypass LOAD2 may
+         * already have produced itself if it executed before LOAD1 completed. */
+        if (!load2->wake_up_signaled[REG_DATA_DEP] &&
+            !load2->ifuse_load2_reg_produced) {
+          reg_file_produce(load2);
+          load2->ifuse_load2_reg_produced = TRUE;
+        }
         for (temp = load2->wake_up_head; temp; temp = temp->next) {
           Op*     dep_op    = temp->op;
           Counter dep_uniq  = temp->unique_num;

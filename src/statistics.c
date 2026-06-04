@@ -276,29 +276,32 @@ static void dump_stats_array(uns8 proc_id, Flag final, Stat stat_array[], uns nu
       fprintf(file_stream, "Core %u\n", proc_id);
       fprint_line(file_stream);
 
+      Counter printed_inst_count = USE_FETCHED_COUNT ? inst_count_fetched[proc_id] : inst_count[proc_id];
+      Counter printed_period_inst_count =
+          printed_inst_count - period_last_inst_count[proc_id];
+
       fprintf(file_stream,
               "Cumulative:        Cycles: %-20llu  Instructions: %-20llu  IPC: "
               "%.5f\n",
-              cycle_count, inst_count_fetched[proc_id], (double)inst_count_fetched[proc_id] / cycle_count);
+              cycle_count, printed_inst_count, (double)printed_inst_count / cycle_count);
       fprintf(file_stream, "\n");
 
       fprintf(file_stream,
               "Periodic:          Cycles: %-20llu  Instructions: %-20llu  IPC: "
               "%.5f\n",
-              cycle_count - period_last_cycle_count, inst_count_fetched[proc_id] - period_last_inst_count[proc_id],
-              (double)(inst_count_fetched[proc_id] - period_last_inst_count[proc_id]) /
-                  (cycle_count - period_last_cycle_count));
+              cycle_count - period_last_cycle_count, printed_period_inst_count,
+              (double)printed_period_inst_count / (cycle_count - period_last_cycle_count));
       fprintf(file_stream, "\n");
 
       //.csv file
       fprintf(csv_file_stream, "Core, %d, %u\n", STATISTICS_CSV_NO_GROUP, proc_id);
 
       fprintf(csv_file_stream, "Cumulative_Cycles, %d, %-20llu\nCumulative_Instructions, %d, %-20llu\n",
-              STATISTICS_CSV_NO_GROUP, cycle_count, STATISTICS_CSV_NO_GROUP, inst_count_fetched[proc_id]);
+              STATISTICS_CSV_NO_GROUP, cycle_count, STATISTICS_CSV_NO_GROUP, printed_inst_count);
 
       fprintf(csv_file_stream, "Periodic_Cycles, %d, %-20llu\nPeriodic_Instructions, %d, %-20llu\n",
               STATISTICS_CSV_NO_GROUP, cycle_count - period_last_cycle_count, STATISTICS_CSV_NO_GROUP,
-              inst_count_fetched[proc_id] - period_last_inst_count[proc_id]);
+              printed_period_inst_count);
     }
 
     if (s->type == LINE_TYPE_STAT) {

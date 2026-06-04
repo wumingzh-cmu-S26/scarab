@@ -214,7 +214,7 @@ static inline void check_heartbeat(uns8 proc_id, Flag final) {
     ASSERT(proc_id, !PERIODIC_DUMP);
     for (uns i = 0; i < NUM_CORES; i++) {
       dump_stats(i, TRUE, global_stat_array[i], NUM_GLOBAL_STATS);
-      period_last_inst_count[i] = inst_count_fetched[i];
+      period_last_inst_count[i] = USE_FETCHED_COUNT ? inst_count_fetched[i] : inst_count[i];
       warmup_dump_done[i] = TRUE;
     }
     period_last_cycle_count = cycle_count;
@@ -225,8 +225,7 @@ static inline void check_heartbeat(uns8 proc_id, Flag final) {
     if (PERIODIC_DUMP) {
       dump_stats(proc_id, TRUE, global_stat_array[proc_id], NUM_GLOBAL_STATS);
       period_last_cycle_count = cycle_count;
-      // this number is used to calcute IPC, so it uses inst_count_fetched always
-      period_last_inst_count[proc_id] = inst_count_fetched[proc_id];
+      period_last_inst_count[proc_id] = USE_FETCHED_COUNT ? inst_count_fetched[proc_id] : inst_count[proc_id];
       period_ID++;
     }
 
@@ -242,7 +241,8 @@ static inline void check_heartbeat(uns8 proc_id, Flag final) {
       last_heartbeat_idx = heartbeat_idx;
     }
     time_t cur_time = time(NULL);
-    double cum_ipc = (double)inst_count_fetched[proc_id] / cycle_count;
+    Counter printed_inst_count = USE_FETCHED_COUNT ? inst_count_fetched[proc_id] : inst_count[proc_id];
+    double  cum_ipc            = (double)printed_inst_count / cycle_count;
     Counter total_inst_count = 0;
     for (uns proc_id = 0; proc_id < NUM_CORES; proc_id++) {
       total_inst_count += USE_FETCHED_COUNT ? inst_count_fetched[proc_id] : inst_count[proc_id];
@@ -265,7 +265,7 @@ static inline void check_heartbeat(uns8 proc_id, Flag final) {
           fprintf(mystdout,
                   "** WARMUP End:   insts:%-10s  cycles:%-10s  time:%-18s  -- "
                   "%.2f IPC (%.2f IPC) --  N/A  KIPS (%.2f KIPS)\n",
-                  unsstr64(inst_count_fetched[proc_id]), unsstr64(cycle_count), unsstr64(sim_time), cum_ipc, cum_ipc,
+                  unsstr64(printed_inst_count), unsstr64(cycle_count), unsstr64(sim_time), cum_ipc, cum_ipc,
                   cum_khz);
           fflush(mystdout);
           break;
@@ -275,7 +275,7 @@ static inline void check_heartbeat(uns8 proc_id, Flag final) {
                   "** Core %u Finished:    insts:%-10s  cycles:%-10s  "
                   "time:%-18s  -- %.2f IPC (%.2f IPC) --  N/A  KIPS (%.2f "
                   "KIPS)\n",
-                  proc_id, unsstr64(inst_count_fetched[proc_id]), unsstr64(cycle_count), unsstr64(sim_time), cum_ipc,
+                  proc_id, unsstr64(printed_inst_count), unsstr64(cycle_count), unsstr64(sim_time), cum_ipc,
                   cum_ipc, cum_khz);
           break;
 

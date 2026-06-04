@@ -265,7 +265,7 @@ void node_issue_queue_dispatch() {
   for (op = node->next_op_into_rs; op; op = op->next_node) {
     /* IFUSE: fused LOAD2 was marked OS_DONE at issue and never enters the RS;
      * walk past without consuming RS_FILL_WIDTH. */
-    if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+    if (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2) {
       ASSERT(node->proc_id, op->state == OS_DONE);
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_RS_FILL_SKIP);
       continue;

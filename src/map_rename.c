@@ -162,12 +162,19 @@ static inline Flag reg_file_check_reg_num(uns reg_table_type, uns op_count) {
 }
 
 static inline Flag ifuse_is_fused_load2(Op *op) {
-  return DO_FUSION && op && !op->off_path && op->fusion_candidate_type == LOAD2;
+  return DO_FUSION && op && !op->off_path && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2;
 }
 
 static inline Flag ifuse_find_load2_alias_reg(Op *op, int self_reg_table_type, int reg_type, int *alias_reg_id) {
   if (!ifuse_is_fused_load2(op))
     return FALSE;
+
+  /* The micro2026 reference bypasses LOAD2's execution/memory resources, but
+   * it still lets rename allocate a destination register for LOAD2. Reusing
+   * LOAD1's physical register is a stronger optimization and breaks the new
+   * rename lifetime accounting for some traces, so keep the reference path
+   * conservative. */
+  return FALSE;
 
   Load2BufferNode *node = find_load2_buffer_node((Counter)op->partner_micro_op_num,
                                                  (Counter)op->partner_micro_op_num);
@@ -543,7 +550,7 @@ static inline void reg_file_release_prev(Op *op, int *reg_table_types, int reg_t
    * onpath_consumers_num may legitimately be 0. The src-side loop below is
    * sanity-only (no state changes); skip it for LOAD2. The dst commit iteration
    * (after this block) still runs normally. */
-  Flag ifuse_skip_src = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+  Flag ifuse_skip_src = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
   if (ifuse_skip_src) STAT_EVENT(op->proc_id, IFUSE_AUDIT_RELEASE_SRC_SKIP);
   if (!ifuse_skip_src) {
   for (uns ii = 0; ii < op->inst_info->table_info.num_src_regs; ++ii) {
@@ -749,7 +756,7 @@ void reg_table_entry_read(struct reg_table_entry *entry, Op *op) {
    * keeps the producer entry's consumers_num/consumed_count balanced without
    * requiring a fake-consume call (which causes produced_cycle vs consumed_cycle
    * ordering violations when LOAD2's source is itself produced later). */
-  if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+  if (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2) {
     STAT_EVENT(op->proc_id, IFUSE_AUDIT_CONSUMER_SKIP);
     return;
   }

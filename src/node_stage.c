@@ -256,7 +256,7 @@ void flush_window() {
       ASSERT(node->proc_id, op->off_path);
       /* IFUSE: LOAD2 was never counted toward node_count at issue, so it
        * also shouldn't count toward flush_ops here. */
-      Flag ifuse_skip = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      Flag ifuse_skip = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
       if (ifuse_skip) STAT_EVENT(node->proc_id, IFUSE_AUDIT_FLUSH_WINDOW);
       if (!op->macro_fused && !ifuse_skip)
         flush_ops++;
@@ -280,7 +280,7 @@ void flush_window() {
       }
       DEBUG(node->proc_id, "Node keeping  op:%s node_id:%llu\n", unsstr64(op->op_num), op->node_id);
       /* IFUSE: same exclusion as flush_ops above. */
-      Flag ifuse_skip_keep = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+      Flag ifuse_skip_keep = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
       if (!op->macro_fused && !ifuse_skip_keep)
         keep_ops++;
       last = &op->next_node;
@@ -453,7 +453,7 @@ void node_fill_rob(Stage_Data* src_sd) {
       continue;
 
     /* IFUSE: fused LOAD2 doesn't issue a memory request, so don't take an LSQ slot. */
-    Flag ifuse_skip_lsq = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    Flag ifuse_skip_lsq = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
     if (ifuse_skip_lsq) {
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_NODE_ISSUE);
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_LSQ_DISPATCH_SKIP);
@@ -502,7 +502,7 @@ void node_fill_rob(Stage_Data* src_sd) {
     // Jump uop after CMP or TEST will be fused into one uop
     node_fuse_op(op);
     /* IFUSE: fused LOAD2 doesn't take a node-table slot. */
-    Flag ifuse_skip_count = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    Flag ifuse_skip_count = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
     if (ifuse_skip_count) STAT_EVENT(op->proc_id, IFUSE_AUDIT_NODECOUNT_SKIP);
     if (!op->macro_fused && !ifuse_skip_count)
       node->node_count++;
@@ -520,7 +520,7 @@ void node_fill_rob(Stage_Data* src_sd) {
      * node_precommit_retire's assertion is satisfied (LOAD2 never goes through
      * the normal node_precommit_update flow because it's already OS_DONE and
      * may retire before the precommit walker reaches it). */
-    if (DO_FUSION && op->fusion_candidate_type == LOAD2) {
+    if (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2) {
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_SET_OS_DONE);
       op->state           = OS_DONE;
       op->precommitted    = TRUE;
@@ -531,12 +531,10 @@ void node_fill_rob(Stage_Data* src_sd) {
        * a LOAD2 in node_head would block precommit of every later op. Stamp
        * dcache_cycle as if the dcache hit at issue so the walker passes. */
       op->dcache_cycle    = cycle_count;
-      /* LOAD2's reg_file_consume + reg_file_produce are deferred to the
-       * wake_up_ops fusion block in map.c (or to wake_up_ops(LOAD2) in the
-       * load1-already-completed branch in map_stage.c). Doing them here would
-       * violate produced_cycle <= consumed_cycle when LOAD2's source happens
-       * to be the destination of a previous fused LOAD2 (whose produce fires
-       * later, when its own LOAD1 completes). */
+      /* Do not produce LOAD2's destination here. LOAD2 never executes; its
+       * destination becomes ready only when LOAD1 completes through the fusion
+       * buffer in map.c::wake_up_ops. Producing at issue lets younger
+       * dependents observe a false-ready value before LOAD1 has completed. */
     } else {
       op->state = OS_IN_ROB;
     }
@@ -676,7 +674,7 @@ void node_retire() {
     node_precommit_retire(op);
 
     /* IFUSE: fused LOAD2 was never on the LSQ; skip lsq_commit. */
-    Flag ifuse_is_load2 = (DO_FUSION && op->fusion_candidate_type == LOAD2);
+    Flag ifuse_is_load2 = (DO_FUSION && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2);
     if (ifuse_is_load2) {
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_RETIRE);
       STAT_EVENT(op->proc_id, IFUSE_AUDIT_LSQ_COMMIT_SKIP);
@@ -747,6 +745,11 @@ void debug_print_retired_uop(Op* op) {
 }
 
 Flag op_not_ready_for_retire(Op* op) {
+  if (DO_FUSION && (op->ifuse_load2_bypass || IFUSE_LOAD2_DEP_BYPASS) &&
+      op->fusion_candidate_type == LOAD2 &&
+      !op->wake_up_signaled[REG_DATA_DEP])
+    return TRUE;
+
   return !(op->state == OS_DONE || OP_DONE(op)) || op->off_path || op->recovery_scheduled || op->redirect_scheduled;
 }
 
@@ -761,7 +764,7 @@ Flag is_node_table_empty() {
       for (Op* o = node->node_head; o; o = o->next_node) {
         if (o->macro_fused)
           continue;
-        if (DO_FUSION && o->fusion_candidate_type == LOAD2)
+        if (DO_FUSION && o->ifuse_load2_bypass && o->fusion_candidate_type == LOAD2)
           continue;
         all_skippable = FALSE;
         break;

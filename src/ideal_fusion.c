@@ -8,15 +8,13 @@
  *   (icache_do_fusion_tag_op_at_fetch, ideal_fusion_classify_at_icache,
  *    lookup_load1/2_candidate_ideal, load_runtime_fusion_candidates).
  *
- * NOTE — port deviation: the reference rewrites op->table_info fields
- * (mem_type, op_type, mem_size, latency) in-place when LOAD2 is identified
- * at fetch. In the new Scarab, table_info is *embedded* in Inst_Info, and
- * Inst_Info is shared across dynamic instances of the same static instruction.
- * Rewriting it here would corrupt every other dynamic instance of the same
- * load. Instead, this port leaves Inst_Info alone and relies on downstream
- * stages (node_stage, dcache_stage, map.c::wake_up_ops) checking
- * `op->fusion_candidate_type == LOAD2` to skip the op. Functionally equivalent;
- * structurally cleaner.
+ * NOTE — the reference rewrites op->table_info fields in-place when LOAD2 is
+ * identified at fetch. In the new Scarab, table_info is embedded in Inst_Info,
+ * and Inst_Info can be shared across dynamic instances of the same static
+ * instruction. For LOAD2, make a private Inst_Info copy before applying the
+ * NOT_MEM rewrite so other dynamic instances are untouched. Normal ideal
+ * fusion then bypasses LOAD2 backend execution and wakes its dependents from
+ * LOAD1.
  */
 
 #include "ideal_fusion.h"
@@ -229,6 +227,10 @@ static void cleanup_old_loads(unsigned int now) {
 
 static DoFusionMetadata* do_fusion_table_idx_load1[DO_FUSION_HASH_SIZE];
 static DoFusionMetadata* do_fusion_table_idx_load2[DO_FUSION_HASH_SIZE];
+static DoFusionMetadata* do_fusion_table_pc_load1[DO_FUSION_HASH_SIZE];
+static DoFusionMetadata* do_fusion_table_pc_load2[DO_FUSION_HASH_SIZE];
+static DoFusionMetadata* do_fusion_table_pc_tail_load1[DO_FUSION_HASH_SIZE];
+static DoFusionMetadata* do_fusion_table_pc_tail_load2[DO_FUSION_HASH_SIZE];
 static Flag              do_fusion_loaded = FALSE;
 
 /* Storage for the Load2 buffer. Functions live in map_stage.c — this is just
@@ -244,6 +246,15 @@ static inline unsigned int better_hash_u32(unsigned int key, unsigned int table_
   return key % table_size;
 }
 
+static inline unsigned int hash_pc_offset(Addr pc, Addr block_offset) {
+  uint64_t key = (uint64_t)pc;
+  key ^= (uint64_t)block_offset + 0x9e3779b97f4a7c15ULL + (key << 6) + (key >> 2);
+  key ^= key >> 33;
+  key *= 0xff51afd7ed558ccdULL;
+  key ^= key >> 33;
+  return (unsigned int)(key % DO_FUSION_HASH_SIZE);
+}
+
 static void load_fusion_candidates(void) {
   if (do_fusion_loaded)
     return;
@@ -252,6 +263,10 @@ static void load_fusion_candidates(void) {
   for (int i = 0; i < DO_FUSION_HASH_SIZE; i++) {
     do_fusion_table_idx_load1[i] = NULL;
     do_fusion_table_idx_load2[i] = NULL;
+    do_fusion_table_pc_load1[i] = NULL;
+    do_fusion_table_pc_load2[i] = NULL;
+    do_fusion_table_pc_tail_load1[i] = NULL;
+    do_fusion_table_pc_tail_load2[i] = NULL;
   }
   for (int i = 0; i < LOAD2_BUFFER_HT_SIZE; i++) {
     load2_buffer_ht[i] = NULL;
@@ -277,13 +292,14 @@ static void load_fusion_candidates(void) {
   while (fgets(line, sizeof(line), f)) {
     uint64_t l1_pc, l2_pc, l1_va, l2_va, l1_hist, l2_hist;
     int64_t  l1_off, l2_off;
-    unsigned l1_size, l2_size, l1_gmon, l2_gmon;
+    unsigned l1_size, l2_size, l1_gmon, l2_gmon, force_pipeline = 0;
     int      n = sscanf(line,
                         "%" SCNx64 ",%" SCNx64 ",%" SCNx64 ",%" SCNx64
-                        ",%" SCNd64 ",%" SCNd64 ",%u,%u,%u,%u,%" SCNu64 ",%" SCNu64,
+                        ",%" SCNd64 ",%" SCNd64 ",%u,%u,%u,%u,%" SCNu64 ",%" SCNu64 ",%u",
                         &l1_pc, &l2_pc, &l1_va, &l2_va, &l1_off, &l2_off,
-                        &l1_size, &l2_size, &l1_gmon, &l2_gmon, &l1_hist, &l2_hist);
-    if (n != 12)
+                        &l1_size, &l2_size, &l1_gmon, &l2_gmon, &l1_hist, &l2_hist,
+                        &force_pipeline);
+    if (n < 12)
       continue;
 
     DoFusionMetadata* m1 = (DoFusionMetadata*)malloc(sizeof(DoFusionMetadata));
@@ -291,32 +307,60 @@ static void load_fusion_candidates(void) {
       break;
     m1->global_micro_op_num              = l1_gmon;
     m1->partner_load_global_micro_op_num = l2_gmon;
+    m1->actual_global_micro_op_num       = 0;
+    m1->partner_actual_global_micro_op_num = 0;
     m1->is_load1                         = TRUE;
+    m1->consumed                         = FALSE;
     m1->pc_addr                          = (Addr)l1_pc;
     m1->partner_pc_addr                  = (Addr)l2_pc;
     m1->block_offset                     = (Addr)l1_off;
     m1->partner_block_offset             = (Addr)l2_off;
+    m1->force_load2_pipeline             = (n == 13 && force_pipeline != 0);
+    m1->partner                          = NULL;
     unsigned int i1                      = better_hash_u32(l1_gmon, DO_FUSION_HASH_SIZE);
-    m1->next                             = do_fusion_table_idx_load1[i1];
+    m1->next_gmon                        = do_fusion_table_idx_load1[i1];
     do_fusion_table_idx_load1[i1]        = m1;
+    unsigned int p1                      = hash_pc_offset((Addr)l1_pc,
+                                                          (Addr)l1_off);
+    m1->next_pc                          = NULL;
+    if (do_fusion_table_pc_tail_load1[p1])
+      do_fusion_table_pc_tail_load1[p1]->next_pc = m1;
+    else
+      do_fusion_table_pc_load1[p1] = m1;
+    do_fusion_table_pc_tail_load1[p1] = m1;
 
     DoFusionMetadata* m2 = (DoFusionMetadata*)malloc(sizeof(DoFusionMetadata));
     if (!m2)
       break;
     m2->global_micro_op_num              = l2_gmon;
     m2->partner_load_global_micro_op_num = l1_gmon;
+    m2->actual_global_micro_op_num       = 0;
+    m2->partner_actual_global_micro_op_num = 0;
     m2->is_load1                         = FALSE;
+    m2->consumed                         = FALSE;
     m2->pc_addr                          = (Addr)l2_pc;
     m2->partner_pc_addr                  = (Addr)l1_pc;
     m2->block_offset                     = (Addr)l2_off;
     m2->partner_block_offset             = (Addr)l1_off;
+    m2->force_load2_pipeline             = (n == 13 && force_pipeline != 0);
+    m2->partner                          = m1;
+    m1->partner                          = m2;
     unsigned int i2                      = better_hash_u32(l2_gmon, DO_FUSION_HASH_SIZE);
-    m2->next                             = do_fusion_table_idx_load2[i2];
+    m2->next_gmon                        = do_fusion_table_idx_load2[i2];
     do_fusion_table_idx_load2[i2]        = m2;
+    unsigned int p2                      = hash_pc_offset((Addr)l2_pc,
+                                                          (Addr)l2_off);
+    m2->next_pc                          = NULL;
+    if (do_fusion_table_pc_tail_load2[p2])
+      do_fusion_table_pc_tail_load2[p2]->next_pc = m2;
+    else
+      do_fusion_table_pc_load2[p2] = m2;
+    do_fusion_table_pc_tail_load2[p2] = m2;
 
     loaded++;
   }
   fclose(f);
+  INC_STAT_EVENT(0, IFUSE_CANDIDATE_PAIRS_LOADED, loaded);
   fprintf(stderr, "ideal_fusion: loaded %u candidate pairs from %s\n", loaded, path);
 }
 
@@ -327,13 +371,135 @@ static DoFusionMetadata* lookup_and_remove(DoFusionMetadata** table,
   while (*slot) {
     if ((*slot)->global_micro_op_num == gmon) {
       DoFusionMetadata* found = *slot;
-      *slot                   = found->next;
-      found->next             = NULL;
-      return found;
+      if (!found->consumed)
+        return found;
     }
-    slot = &(*slot)->next;
+    slot = &(*slot)->next_gmon;
   }
   return NULL;
+}
+
+static DoFusionMetadata* lookup_by_pc_offset(DoFusionMetadata** table,
+                                             Addr                pc,
+                                             Addr                block_offset) {
+  unsigned int       idx  = hash_pc_offset(pc, block_offset);
+  DoFusionMetadata** slot = &table[idx];
+  while (*slot) {
+    DoFusionMetadata* cur = *slot;
+    if (cur->consumed) {
+      *slot = cur->next_pc;
+      continue;
+    }
+    if (cur->pc_addr == pc && cur->block_offset == block_offset)
+      return cur;
+    slot = &cur->next_pc;
+  }
+  return NULL;
+}
+
+static inline Flag load2_candidate_partner_ready(const DoFusionMetadata* m,
+                                                 Counter current_gmon) {
+  return m && !m->is_load1 && m->partner_actual_global_micro_op_num &&
+         m->partner_actual_global_micro_op_num < current_gmon;
+}
+
+static DoFusionMetadata* lookup_load2_by_pc_offset_ready(Addr    pc,
+                                                         Addr    block_offset,
+                                                         Counter current_gmon) {
+  unsigned int       idx  = hash_pc_offset(pc, block_offset);
+  DoFusionMetadata** slot = &do_fusion_table_pc_load2[idx];
+  while (*slot) {
+    DoFusionMetadata* cur = *slot;
+    if (cur->consumed) {
+      *slot = cur->next_pc;
+      continue;
+    }
+    if (cur->pc_addr == pc && cur->block_offset == block_offset &&
+        load2_candidate_partner_ready(cur, current_gmon))
+      return cur;
+    slot = &cur->next_pc;
+  }
+  return NULL;
+}
+
+static void rewrite_load2_as_not_mem(Op* op) {
+  Inst_Info* rewritten = (Inst_Info*)malloc(sizeof(Inst_Info));
+  ASSERT(op->proc_id, rewritten);
+  *rewritten = *op->inst_info;
+
+  rewritten->table_info.mem_type = NOT_MEM;
+  rewritten->table_info.mem_size = 0;
+  rewritten->extra_ld_latency    = 0;
+  /* Match the micro2026-ideal-fusion reference: fused LOAD2 becomes a
+   * non-memory op with one-cycle latency. */
+  rewritten->latency             = 1;
+
+  op->inst_info               = rewritten;
+  op->oracle_info.mem_size    = 0;
+  op->ifuse_private_inst_info = TRUE;
+}
+
+static void audit_candidate_match(Op* op, const DoFusionMetadata* m) {
+  Addr actual_offset = get_cacheblock_offset(op->oracle_info.va);
+
+  if (m->is_load1)
+    STAT_EVENT(op->proc_id, IFUSE_LOAD1_MATCHED);
+  else
+    STAT_EVENT(op->proc_id, IFUSE_LOAD2_MATCHED);
+
+  if (op->inst_info->addr != m->pc_addr) {
+    STAT_EVENT(op->proc_id,
+               m->is_load1 ? IFUSE_LOAD1_PC_MISMATCH : IFUSE_LOAD2_PC_MISMATCH);
+  }
+
+  if (actual_offset != m->block_offset) {
+    STAT_EVENT(op->proc_id,
+               m->is_load1 ? IFUSE_LOAD1_OFFSET_MISMATCH :
+                             IFUSE_LOAD2_OFFSET_MISMATCH);
+  }
+}
+
+static inline Flag candidate_identity_matches(Op* op, const DoFusionMetadata* m) {
+  return op->inst_info->addr == m->pc_addr &&
+         get_cacheblock_offset(op->oracle_info.va) == m->block_offset;
+}
+
+static void audit_gmon_identity_mismatch(Op* op, const DoFusionMetadata* m) {
+  if (op->inst_info->addr != m->pc_addr)
+    STAT_EVENT(op->proc_id,
+               m->is_load1 ? IFUSE_LOAD1_PC_MISMATCH : IFUSE_LOAD2_PC_MISMATCH);
+  if (get_cacheblock_offset(op->oracle_info.va) != m->block_offset)
+    STAT_EVENT(op->proc_id,
+               m->is_load1 ? IFUSE_LOAD1_OFFSET_MISMATCH :
+                             IFUSE_LOAD2_OFFSET_MISMATCH);
+}
+
+static void record_actual_match(Op* op, DoFusionMetadata* m) {
+  m->actual_global_micro_op_num = (Counter)op->global_micro_op_num;
+  if (m->partner)
+    m->partner->partner_actual_global_micro_op_num =
+        (Counter)op->global_micro_op_num;
+}
+
+static Counter candidate_partner_gmon(const DoFusionMetadata* m) {
+  return m->partner_actual_global_micro_op_num ?
+             m->partner_actual_global_micro_op_num :
+             (Counter)m->partner_load_global_micro_op_num;
+}
+
+static Flag ifuse_pair_uses_load2_bypass(Counter self_gmon, Counter partner_gmon,
+                                         Flag force_load2_pipeline) {
+  if (!IFUSE_LOAD2_BYPASS)
+    return FALSE;
+
+  if (IFUSE_LOAD2_PIPELINE_CSV_FLAG && force_load2_pipeline)
+    return FALSE;
+
+  Counter dist = self_gmon > partner_gmon ? self_gmon - partner_gmon : partner_gmon - self_gmon;
+  if (IFUSE_LOAD2_PIPELINE_MAX_DIST && dist <= IFUSE_LOAD2_PIPELINE_MAX_DIST)
+    return FALSE;
+
+  return TRUE;
 }
 
 void ideal_fusion_classify_at_icache(Op* op) {
@@ -354,22 +520,58 @@ void ideal_fusion_classify_at_icache(Op* op) {
 
   DoFusionMetadata* m = lookup_and_remove(do_fusion_table_idx_load1,
                                           op->global_micro_op_num);
+  Addr actual_offset = get_cacheblock_offset(op->oracle_info.va);
+  if (m && IFUSE_PC_FALLBACK && !candidate_identity_matches(op, m)) {
+    audit_gmon_identity_mismatch(op, m);
+    m = NULL;
+  }
+  if (!m && IFUSE_PC_FALLBACK) {
+    m = lookup_by_pc_offset(do_fusion_table_pc_load1,
+                            op->inst_info->addr,
+                            actual_offset);
+    if (m)
+      STAT_EVENT(op->proc_id, IFUSE_LOAD1_PC_FALLBACK_MATCHED);
+  }
   if (m) {
+    audit_candidate_match(op, m);
+    record_actual_match(op, m);
+    m->consumed               = TRUE;
     op->fusion_candidate_type = LOAD1;
-    op->partner_micro_op_num  = m->partner_load_global_micro_op_num;
-    free(m);
+    op->partner_micro_op_num  = candidate_partner_gmon(m);
+    op->ifuse_load2_bypass =
+        ifuse_pair_uses_load2_bypass((Counter)op->global_micro_op_num,
+                                     (Counter)op->partner_micro_op_num,
+                                     m->force_load2_pipeline);
     return;
   }
 
   m = lookup_and_remove(do_fusion_table_idx_load2, op->global_micro_op_num);
+  if (m && IFUSE_PC_FALLBACK && !candidate_identity_matches(op, m)) {
+    audit_gmon_identity_mismatch(op, m);
+    m = NULL;
+  }
+  if (m && IFUSE_PC_FALLBACK &&
+      !load2_candidate_partner_ready(m, (Counter)op->global_micro_op_num))
+    m = NULL;
+  if (!m && IFUSE_PC_FALLBACK) {
+    m = lookup_load2_by_pc_offset_ready(op->inst_info->addr,
+                                        actual_offset,
+                                        (Counter)op->global_micro_op_num);
+    if (m)
+      STAT_EVENT(op->proc_id, IFUSE_LOAD2_PC_FALLBACK_MATCHED);
+  }
   if (m) {
+    audit_candidate_match(op, m);
+    record_actual_match(op, m);
+    m->consumed               = TRUE;
     op->fusion_candidate_type = LOAD2;
-    op->partner_micro_op_num  = m->partner_load_global_micro_op_num;
-    /* IFUSE deviation from reference: do NOT rewrite shared inst_info. The
-     * fusion_candidate_type tag is checked in node_stage / dcache_stage /
-     * map.c::wake_up_ops to skip this op. See header comment for rationale. */
+    op->partner_micro_op_num  = candidate_partner_gmon(m);
+    op->ifuse_load2_bypass =
+        ifuse_pair_uses_load2_bypass((Counter)op->global_micro_op_num,
+                                     (Counter)op->partner_micro_op_num,
+                                     m->force_load2_pipeline);
+    rewrite_load2_as_not_mem(op);
     STAT_EVENT(op->proc_id, NUM_FUSED_PAIRS_IDEAL);
-    free(m);
   }
 }
 

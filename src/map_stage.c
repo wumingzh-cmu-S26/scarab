@@ -258,7 +258,7 @@ void update_map_stage(Stage_Data* src_sd) {
 /* IFUSE diagnostics */
 
 static inline Flag ifuse_is_fused_load2(Op* op) {
-  return DO_FUSION && op && !op->off_path && op->fusion_candidate_type == LOAD2;
+  return DO_FUSION && op && !op->off_path && op->ifuse_load2_bypass && op->fusion_candidate_type == LOAD2;
 }
 
 static inline uns ifuse_count_fused_load2(Stage_Data* sd) {
@@ -376,6 +376,8 @@ static inline void ifuse_map_handle(Op* op) {
   if (!DO_FUSION)
     return;
   if (op->off_path)
+    return;
+  if (!op->ifuse_load2_bypass && !IFUSE_LOAD2_DEP_BYPASS)
     return;
   if (op->fusion_candidate_type == NOT_FUSION_CANDIDATE)
     return;

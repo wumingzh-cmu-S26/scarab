@@ -120,3 +120,20 @@ DEF_PARAM( fusion_distance              , FUSION_DISTANCE                   , un
 /* Pass 2: actuate fusion using CSV produced by pass 1 */
 DEF_PARAM( do_fusion                    , DO_FUSION                         , Flag   , Flag   , FALSE , )
 DEF_PARAM( fusion_candidates_file       , FUSION_CANDIDATES_FILE            , char*  , string , NULL  , )
+/* Ideal-fusion pass-2 actuation: fused LOAD2 does not execute and does not
+ * consume backend RS/LSQ/node-table capacity. LOAD1 wakes LOAD2 dependents
+ * through the fusion buffer. Disable only for old-port diagnostics. */
+DEF_PARAM( ifuse_load2_bypass           , IFUSE_LOAD2_BYPASS                , Flag   , Flag   , TRUE  , )
+/* Diagnostic hybrid: when IFUSE_LOAD2_BYPASS is enabled, keep very-close fused
+ * LOAD2 ops in the normal NOT_MEM pipeline path instead of bypassing. Zero
+ * disables the hybrid. */
+DEF_PARAM( ifuse_load2_pipeline_max_dist, IFUSE_LOAD2_PIPELINE_MAX_DIST     , uns    , uns    , 0     , )
+/* Experimental diagnostics: if a candidate CSV has an optional 13th column,
+ * use nonzero values to force that pair's LOAD2 into the normal pipeline path. */
+DEF_PARAM( ifuse_load2_pipeline_csv_flag, IFUSE_LOAD2_PIPELINE_CSV_FLAG     , Flag   , Flag   , FALSE , )
+/* Pass-2 recovery path: when the candidate global micro-op number stream drifts
+ * across Scarab versions, match the next candidate by PC + cache-block offset. */
+DEF_PARAM( ifuse_pc_fallback             , IFUSE_PC_FALLBACK                , Flag   , Flag   , TRUE  , )
+/* Diagnostic partial bypass: keep LOAD2 in normal ROB/RS/FU flow, but wake
+ * LOAD2 dependents from LOAD1 through the fusion buffer. */
+DEF_PARAM( ifuse_load2_dep_bypass        , IFUSE_LOAD2_DEP_BYPASS           , Flag   , Flag   , FALSE , )
