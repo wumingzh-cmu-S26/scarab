@@ -158,7 +158,7 @@ static LoadMetadata* find_fusion_candidate(Op* l2) {
     if (!same_cacheblock(cur->virtual_addr, cur->mem_size,
                          l2->oracle_info.va, ti->mem_size))
       continue;
-    if (distance(cur->global_micro_op_num, global_micro_op_num) > FUSION_DISTANCE)
+    if (distance(cur->global_micro_op_num, global_micro_op_num) >= FUSION_DISTANCE)
       continue;
     log_pair(cur, l2);
     return cur;
