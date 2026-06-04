@@ -137,3 +137,13 @@ DEF_PARAM( ifuse_pc_fallback             , IFUSE_PC_FALLBACK                , Fl
 /* Diagnostic partial bypass: keep LOAD2 in normal ROB/RS/FU flow, but wake
  * LOAD2 dependents from LOAD1 through the fusion buffer. */
 DEF_PARAM( ifuse_load2_dep_bypass        , IFUSE_LOAD2_DEP_BYPASS           , Flag   , Flag   , FALSE , )
+/* IFUSE min-wakeup model: when a fused LOAD2 is bypassed, probe the L1 dcache
+ * at issue; if its (shared) line already hits, wake LOAD2's dependents at an
+ * L1-hit latency instead of waiting for LOAD1 to complete. Recovers IPC where
+ * LOAD2 would resolve independently before LOAD1 (e.g. pr_gnutella31 sp97). */
+DEF_PARAM( ifuse_load2_hit_self_wake     , IFUSE_LOAD2_HIT_SELF_WAKE         , Flag   , Flag   , FALSE , )
+/* A1 refinement of the above: only self-wake LOAD2 when its address operands are
+ * already resolved, and anchor self-resolution at address-ready + L1 latency
+ * (not node-dispatch). More selective -> fewer pairs self-wake -> less overshoot
+ * vs the reference, while still fixing the LOAD2-resolves-before-LOAD1 case. */
+DEF_PARAM( ifuse_load2_hit_addr_ready    , IFUSE_LOAD2_HIT_ADDR_READY        , Flag   , Flag   , FALSE , )

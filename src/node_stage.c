@@ -52,6 +52,7 @@
 #include "memory/memory.h"
 
 #include "decoupled_frontend.h"
+#include "dcache_stage.h"
 #include "exec_ports.h"
 #include "ft.h"
 #include "icache_stage.h"
@@ -534,7 +535,49 @@ void node_fill_rob(Stage_Data* src_sd) {
       /* Do not produce LOAD2's destination here. LOAD2 never executes; its
        * destination becomes ready only when LOAD1 completes through the fusion
        * buffer in map.c::wake_up_ops. Producing at issue lets younger
-       * dependents observe a false-ready value before LOAD1 has completed. */
+       * dependents observe a false-ready value before LOAD1 has completed.
+       *
+       * Exception (IFUSE_LOAD2_HIT_SELF_WAKE): if LOAD2's line already hits in
+       * the L1 dcache, its value is genuinely available without LOAD1.  Wake
+       * its dependents at an L1-hit latency from now -- the min(LOAD1_done,
+       * LOAD2_own) wakeup model.  A cache miss still defers to LOAD1. */
+      if (IFUSE_LOAD2_HIT_SELF_WAKE && !op->wake_up_signaled[REG_DATA_DEP]) {
+        Addr ifuse_line_addr;
+        if (do_oracle_dcache_access(op, &ifuse_line_addr)) {
+          /* A1: optionally require LOAD2's address operands to be resolved and
+           * anchor at address-ready (not dispatch), so we self-wake only pairs
+           * that genuinely resolve before LOAD1. */
+          Flag    ifuse_addr_ok    = TRUE;
+          Counter ifuse_addr_ready = cycle_count;
+          if (IFUSE_LOAD2_HIT_ADDR_READY) {
+            for (uns ifuse_si = 0; ifuse_si < op->num_srcs; ifuse_si++) {
+              Src_Info* ifuse_s = &op->src_info[ifuse_si];
+              if (ifuse_s->type != REG_DATA_DEP || !ifuse_s->op)
+                continue;
+              Op* ifuse_sop = ifuse_s->op;
+              if (ifuse_sop->op_pool_valid && ifuse_sop->unique_num == ifuse_s->unique_num) {
+                if (!ifuse_sop->wake_up_signaled[REG_DATA_DEP]) { ifuse_addr_ok = FALSE; break; }
+                if ((Counter)ifuse_sop->wake_cycle > ifuse_addr_ready)
+                  ifuse_addr_ready = (Counter)ifuse_sop->wake_cycle;
+              }
+            }
+            if (!ifuse_addr_ok) STAT_EVENT(op->proc_id, IFUSE_LOAD2_HIT_ADDR_NOT_READY);
+          }
+          Counter          ifuse_l1_gmon = (Counter)op->partner_micro_op_num;
+          Load2BufferNode* ifuse_fnode   = find_load2_buffer_node(ifuse_l1_gmon, ifuse_l1_gmon);
+          if (ifuse_addr_ok && ifuse_fnode && !ifuse_fnode->entry.load1_completed &&
+              !ifuse_fnode->entry.pair_completed) {
+            op->wake_cycle = ifuse_addr_ready + DCACHE_CYCLES;
+            wake_up_ops(op, REG_DATA_DEP, model->wake_hook);
+            ifuse_fnode->entry.load2_waiting  = FALSE;
+            ifuse_fnode->entry.pair_completed = TRUE;
+            remove_load2_buffer_node(ifuse_fnode);
+            STAT_EVENT(op->proc_id, IFUSE_LOAD2_HIT_SELF_WAKE_FIRED);
+          }
+        } else {
+          STAT_EVENT(op->proc_id, IFUSE_LOAD2_HIT_PROBE_MISS);
+        }
+      }
     } else {
       op->state = OS_IN_ROB;
     }
