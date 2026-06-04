@@ -7,7 +7,7 @@
  * Identifies pairs of on-path memory loads (LOAD1 -> LOAD2) where:
  *   - both accesses fit inside the same 64B cache block,
  *   - no intervening on-path store hits that block,
- *   - LOAD2's on-path micro-op count minus LOAD1's is < FUSION_DISTANCE,
+ *   - LOAD2's on-path micro-op count minus LOAD1's is <= FUSION_DISTANCE,
  *   - each load participates in at most one pair.
  *
  * Pairs are written to log_ifuse_pairs.txt (CSV) when
