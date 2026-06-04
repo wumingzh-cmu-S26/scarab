@@ -645,7 +645,7 @@ Icache_State icache_serving_actions(Break_Reason* break_fetch) {
     occupied_lookup_buffer = 1;
   }
   {
-    static uint64_t dbg_icache_while_iters = 0;
+    uint64_t dbg_icache_while_iters = 0;
     while (ic->sd.op_count < ic->sd.max_op_count) {
       if (++dbg_icache_while_iters > 100000) {
         fprintf(stderr,
