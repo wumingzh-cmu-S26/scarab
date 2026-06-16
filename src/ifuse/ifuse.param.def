@@ -1,3 +1,4 @@
+DEF_PARAM(ifuse_enabled, IFUSE_ENABLED, Flag, Flag, TRUE, )
 DEF_PARAM(ifuse_fusion_distance, IFUSE_FUSION_DISTANCE, uns, uns, 512, )
 DEF_PARAM(ifuse_apt_match_policy, IFUSE_APT_MATCH_POLICY, uns, uns, 0, )
 DEF_PARAM(ifuse_training_enabled, IFUSE_TRAINING_ENABLED, Flag, Flag, TRUE, )
@@ -12,3 +13,6 @@ DEF_PARAM(ifuse_fct_delta_select_mispred_penalty, IFUSE_FCT_DELTA_SELECT_MISPRED
 DEF_PARAM(ifuse_fct_delta_select_correct_reward, IFUSE_FCT_DELTA_SELECT_CORRECT_REWARD, uns, uns, 1, )
 DEF_PARAM(ifuse_fct_insert_on_first_obs, IFUSE_FCT_INSERT_ON_FIRST_OBS, Flag, Flag, TRUE, )
 DEF_PARAM(ifuse_fct_initial_conf, IFUSE_FCT_INITIAL_CONF, uns, uns, 4, )
+DEF_PARAM(ifuse_adaptive_mem_gate, IFUSE_ADAPTIVE_MEM_GATE, Flag, Flag, FALSE, )
+DEF_PARAM(ifuse_mem_gate_window_cycles, IFUSE_MEM_GATE_WINDOW_CYCLES, uns, uns, 100000, )
+DEF_PARAM(ifuse_mem_gate_enable_permille, IFUSE_MEM_GATE_ENABLE_PERMILLE, uns, uns, 100, )
