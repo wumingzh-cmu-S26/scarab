@@ -2,6 +2,7 @@
 
 #include "ifuse_retired_load_history.h"
 #include "ifuse_training_table.h"
+#include "ifuse.param.h"
 
 #define IFUSE_TRAIN_CACHE_LINE_SIZE 64U
 
@@ -14,6 +15,9 @@ void ifuse_train_retire_init(void) {
 
 void ifuse_train_retired_op(Op* op) {
     if (!op || op->off_path || !op->inst_info) {
+        return;
+    }
+    if (!IFUSE_ENABLED) {
         return;
     }
 
